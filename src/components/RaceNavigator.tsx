@@ -29,7 +29,9 @@ function toDayNumber(ymd: string): number {
 function formatDateLabel(ymd: string): string {
   const [y, m, d] = ymd.split('-').map(Number);
   const wd = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
-  return `${m}/${d}（${wd}）`;
+  // 今年以外の日付は年も付ける（過去のレース表示用）
+  const yearPrefix = y !== new Date().getFullYear() ? `${y}/` : '';
+  return `${yearPrefix}${m}/${d}（${wd}）`;
 }
 
 export const RaceNavigator: React.FC<RaceNavigatorProps> = ({ races, selectedRace, onSelectRace }) => {
