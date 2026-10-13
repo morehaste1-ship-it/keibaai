@@ -519,6 +519,42 @@ export class RaceRepository {
     return (this.db.prepare(`SELECT time_sec FROM horse_runs WHERE ${where.join(' AND ')}`).all(...args) as { time_sec: number }[]).map((r) => r.time_sec);
   }
 
+  /**
+   * 枠の有利不利：条件に合う過去走の枠番ごとの出走数と3着以内の数。fromDate 以上・beforeDate より前の走だけ
+   */
+  frameStats(q: { venue: string; surface: string; distance: number }, fromDate: string, beforeDate: string): { frame: number; n: number; top3: number }[] {
+    return this.db
+      .prepare(
+        `SELECT frame_number AS frame, COUNT(*) AS n, SUM(CASE WHEN finish_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END) AS top3
+         FROM horse_runs
+         WHERE venue_name = ? AND surface = ? AND distance = ? AND date >= ? AND date < ?
+           AND frame_number IS NOT NULL AND finish_position IS NOT NULL
+         GROUP BY frame_number`,
+      )
+      .all(q.venue, q.surface, q.distance, fromDate, beforeDate) as { frame: number; n: number; top3: number }[];
+  }
+
+  /**
+   * 休み明け（前走から minDays 日以上）の全体の傾向：beforeDate より前の走のうち、前走がある走の数・3着以内の数と、
+   * そのうち休み明けの走の数・3着以内の数
+   */
+  layoffStats(beforeDate: string, minDays: number): { n: number; top3: number; layoffN: number; layoffTop3: number } {
+    const r = this.db
+      .prepare(
+        `WITH x AS (
+           SELECT finish_position, date, LAG(date) OVER (PARTITION BY horse_id ORDER BY date) AS prev
+           FROM horse_runs WHERE date < ?
+         )
+         SELECT COUNT(*) AS n,
+                SUM(CASE WHEN finish_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END) AS top3,
+                SUM(CASE WHEN julianday(date) - julianday(prev) >= ? THEN 1 ELSE 0 END) AS layoffN,
+                SUM(CASE WHEN julianday(date) - julianday(prev) >= ? AND finish_position BETWEEN 1 AND 3 THEN 1 ELSE 0 END) AS layoffTop3
+         FROM x WHERE prev IS NOT NULL AND finish_position IS NOT NULL`,
+      )
+      .get(beforeDate, minDays, minDays) as { n: number; top3: number | null; layoffN: number | null; layoffTop3: number | null };
+    return { n: r.n, top3: r.top3 ?? 0, layoffN: r.layoffN ?? 0, layoffTop3: r.layoffTop3 ?? 0 };
+  }
+
   /** 馬の過去走（新しい順） */
   listHorseRuns(horseId: string): HorseRunRecord[] {
     const rows = this.db.prepare('SELECT * FROM horse_runs WHERE horse_id = ? ORDER BY date DESC').all(horseId) as any[];

@@ -2,6 +2,7 @@
  * データ予想の点数（各項目 0〜100）を出走馬ごとに計算する
  *
  * 項目: 近走 / 適性（芝ダ・距離帯、会場、馬場）/ 騎手 / 相性（騎手×脚質、騎手×枠）/ 過去10年の傾向 / 状態 / 末脚 / 着差 / スピード
+ *       / 枠（コースの枠の有利不利）/ 条件替わり（距離・芝ダの変化）/ 休み明け
  * 配分（重み）は画面側で掛けて合計する（スライダーで変えられるように）。
  * DB は読むだけで書き込まない。
  * 未来のデータが混ざらないよう、馬・騎手・過去10年の成績はすべて「レース日より前」のものだけを使う
@@ -55,6 +56,19 @@ const SPEED_WINDOW = 5;
 const SPEED_BEST = 2;
 const SPEED_MIN_SAMPLES = 10;
 const SPEED_POINTS_PER_SEC = 25;
+/** 枠：何年分の過去走を見るか・必要な走数・枠グループの補正の強さ・全体平均との比 1.0 差あたりの点数 */
+const FRAME_YEARS = 5;
+const FRAME_MIN_RUNS = 100;
+const FRAME_K = 50;
+const FRAME_POINTS = 200;
+/** 条件替わり：距離が何m以上変わったら「延長・短縮」とみなすか */
+const CHANGE_DISTANCE = 200;
+/** 休み明け：前走から何日以上を休み明けとするか（状態の項目と同じ） */
+const LAYOFF_DAYS = 91;
+/** 条件替わり・休み明け：その馬のふだんの3着以内率との差 1.0（100ポイント）あたりの点数（10ポイント高いと+20点） */
+const DIFF_POINTS = 200;
+/** 休み明けの全体の傾向（月ごとに1回だけ計算して使い回す。キー = レース日の年月） */
+const layoffPriorCache = new Map<string, { factor: number; detail: string } | null>();
 /** 「過去10年」の点数をそのまま使うのに必要な過去のレース数（これ未満は中立寄りに補正） */
 export const HISTORY_MIN_RACES = 5;
 
@@ -100,6 +114,9 @@ export interface ScoreItem {
     closing: ScoreComponent;
     margin: ScoreComponent;
     speed: ScoreComponent;
+    frame: ScoreComponent;
+    change: ScoreComponent;
+    layoff: ScoreComponent;
   };
 }
 
@@ -128,6 +145,9 @@ export const DEFAULT_WEIGHTS: ScoreResult['defaultWeights'] = {
   closing: 0,
   margin: 0,
   speed: 0,
+  frame: 0,
+  change: 0,
+  layoff: 0,
 };
 
 /** 着差（秒）→ 点数。勝ち（マイナス・0）は100点 */
@@ -159,6 +179,23 @@ function daysBetween(from: string, to: string): number {
 }
 
 const pct = (r: number) => `${Math.round(r * 100)}%`;
+const clampScore = (v: number) => Math.max(0, Math.min(100, Math.round(v)));
+
+/** 前走 → 今回 の条件の変化（芝ダが替われば「芝→ダート」、距離が200m以上変われば「距離延長・短縮」、それ以外は null） */
+export function changeTypeOf(
+  prev: { surface: string | null; distance: number | null },
+  next: { surface: string | null; distance: number | null },
+): string | null {
+  const sOk = (s: string | null) => s === '芝' || s === 'ダート';
+  if (sOk(prev.surface) && sOk(next.surface) && prev.surface !== next.surface) return `${prev.surface}→${next.surface}`;
+  // 障害 ⇔ 平地 は距離の比較をせず、別の変化として扱う
+  if (prev.surface && next.surface && (prev.surface === '障害') !== (next.surface === '障害')) return `${prev.surface}→${next.surface}`;
+  if (prev.distance && next.distance) {
+    if (next.distance - prev.distance >= CHANGE_DISTANCE) return '距離延長';
+    if (prev.distance - next.distance >= CHANGE_DISTANCE) return '距離短縮';
+  }
+  return null;
+}
 const isTop3 = (r: { finishPosition: number | null }) => r.finishPosition !== null && r.finishPosition <= 3;
 const NEUTRAL = (detail: string): ScoreComponent => ({ score: 50, hasData: false, detail });
 
@@ -236,6 +273,42 @@ export class ScoreService {
     // 0件の位置が0点にならないよう +1 で補正した割合
     const groupShare = (g: '前' | '中' | '後') => (groupCounts[g] + 1) / (groupTotal + 3);
     const maxShare = Math.max(groupShare('前'), groupShare('中'), groupShare('後'));
+
+    // 枠の有利不利：同じ競馬場・芝ダ・距離の過去5年の走（レース日より前）を枠グループ（内・中・外）ごとに集計
+    const frameGroups = new Map<string, { n: number; top3: number }>();
+    let frameTotal = { n: 0, top3: 0 };
+    if (race.surface && race.surface !== '障害' && race.distance) {
+      const rows = this.repo.frameStats(
+        { venue: race.venueName, surface: race.surface, distance: race.distance },
+        cutoffDate(FRAME_YEARS, new Date(`${race.date}T00:00:00`)),
+        race.date,
+      );
+      for (const r of rows) {
+        const g = frameGroupOf(r.frame);
+        if (!g) continue;
+        const cur = frameGroups.get(g) ?? { n: 0, top3: 0 };
+        frameGroups.set(g, { n: cur.n + r.n, top3: cur.top3 + r.top3 });
+        frameTotal = { n: frameTotal.n + r.n, top3: frameTotal.top3 + r.top3 };
+      }
+    }
+
+    // 休み明けの全体の傾向（休み明けの走の3着以内率 ÷ 全体の3着以内率）。その月の1日より前の走で計算し、月ごとに使い回す
+    const layoffPrior = (() => {
+      const key = race.date.slice(0, 7);
+      if (!layoffPriorCache.has(key)) {
+        const st = this.repo.layoffStats(`${key}-01`, LAYOFF_DAYS);
+        layoffPriorCache.set(
+          key,
+          st.n >= 1000 && st.layoffN >= 100 && st.top3 > 0
+            ? {
+                factor: st.layoffTop3 / st.layoffN / (st.top3 / st.n),
+                detail: `全体では休み明けの3着以内率 ${pct(st.layoffTop3 / st.layoffN)}（ふだん ${pct(st.top3 / st.n)}）`,
+              }
+            : null,
+        );
+      }
+      return layoffPriorCache.get(key)!;
+    })();
 
     const items = this.repo.getEntries(raceKey).map((e): ScoreItem => {
       const odds = e.horseNumber !== null ? oddsMap.get(e.horseNumber) : undefined;
@@ -464,6 +537,83 @@ export class ScoreService {
         };
       }
 
+      // その馬のふだんの3着以内率（条件替わり・休み明けの比較の基準。少ない馬は全体平均30%に寄せる）
+      const finished = runs.filter((r) => r.finishPosition !== null);
+      const baseRate = Math.max(0.05, smoothRate(finished.filter(isTop3).length, finished.length, HORSE_PRIOR, HORSE_K));
+      // 前の走 → 次の走 の組（runs は新しい順なので runs[i+1] → runs[i]）
+      const pairs = runs.slice(0, -1).map((next, i) => ({ prev: runs[i + 1], next }));
+
+      // 10. 枠（今回の枠グループの3着以内率を、そのコース全体の率と比べる）
+      let frame: ScoreComponent;
+      const myGroup = frameGroupOf(e.frameNumber);
+      if (!myGroup) {
+        frame = NEUTRAL('枠番が未発表（中立50点）');
+      } else if (frameTotal.n < FRAME_MIN_RUNS) {
+        frame = NEUTRAL(`このコースの過去走が${frameTotal.n}走で少ない（${FRAME_MIN_RUNS}走未満は中立50点）`);
+      } else {
+        const overall = frameTotal.top3 / frameTotal.n;
+        const g = frameGroups.get(myGroup) ?? { n: 0, top3: 0 };
+        const rate = smoothRate(g.top3, g.n, overall, FRAME_K);
+        frame = {
+          score: clampScore(50 + (rate / overall - 1) * FRAME_POINTS),
+          hasData: true,
+          detail:
+            `${race.venueName}${race.surface}${race.distance}m（過去${FRAME_YEARS}年）の${myGroup} 3着内 ${g.top3}/${g.n}（${g.n > 0 ? pct(g.top3 / g.n) : '-'}）` +
+            `／コース全体 ${pct(overall)}`,
+        };
+      }
+
+      // 11. 条件替わり（前走から芝ダ・距離が変わるとき、その馬の過去の同じ変化での成績を、ふだんの成績と比べる）
+      let change: ScoreComponent;
+      const changeType = last ? changeTypeOf(last, race) : null;
+      if (!last) {
+        change = NEUTRAL('JRAの出走歴なし（中立50点）');
+      } else if (!changeType) {
+        change = {
+          score: 50,
+          hasData: true,
+          detail: `前走（${last.surface ?? '-'}${last.distance ?? '-'}m）から大きな変化なし（50点）`,
+        };
+      } else {
+        const same = pairs.filter((p) => p.next.finishPosition !== null && changeTypeOf(p.prev, p.next) === changeType);
+        const t3 = same.filter((p) => isTop3(p.next)).length;
+        if (same.length === 0) {
+          change = NEUTRAL(`今回が初めての${changeType}（前走 ${last.surface ?? '-'}${last.distance ?? '-'}m。中立50点）`);
+        } else {
+          const rate = smoothRate(t3, same.length, baseRate, HORSE_K);
+          change = {
+            score: clampScore(50 + (rate - baseRate) * DIFF_POINTS),
+            hasData: true,
+            detail: `${changeType}（前走 ${last.surface ?? '-'}${last.distance ?? '-'}m）：過去の${changeType} 3着内 ${t3}/${same.length}／ふだん ${pct(baseRate)}`,
+          };
+        }
+      }
+
+      // 12. 休み明け（前走から91日以上のとき、その馬の過去の休み明けの成績を、ふだんの成績と比べる。初めてなら全体の傾向）
+      let layoff: ScoreComponent;
+      if (!last || intervalDays === null) {
+        layoff = NEUTRAL('JRAの出走歴なし（中立50点）');
+      } else if (intervalDays < LAYOFF_DAYS) {
+        layoff = { score: 50, hasData: true, detail: `休み明けではない（間隔${intervalDays}日。50点）` };
+      } else {
+        const same = pairs.filter((p) => p.next.finishPosition !== null && daysBetween(p.prev.date, p.next.date) >= LAYOFF_DAYS);
+        const t3 = same.filter((p) => isTop3(p.next)).length;
+        if (same.length === 0 && !layoffPrior) {
+          layoff = NEUTRAL(`休み明け（${intervalDays}日）。この馬は初めてで、全体の傾向もデータ不足（中立50点）`);
+        } else {
+          // 全体の傾向（休み明けは何割ほど成績が落ちるか）を基準に、その馬の過去の休み明けで補正する
+          const prior = baseRate * (layoffPrior?.factor ?? 1);
+          const rate = smoothRate(t3, same.length, prior, HORSE_K);
+          layoff = {
+            score: clampScore(50 + (rate - baseRate) * DIFF_POINTS),
+            hasData: true,
+            detail:
+              `休み明け（${intervalDays}日）：この馬の過去の休み明け 3着内 ${t3}/${same.length}／ふだん ${pct(baseRate)}` +
+              (layoffPrior ? `／${layoffPrior.detail}` : ''),
+          };
+        }
+      }
+
       const pedRow = e.netkeibaHorseId ? this.repo.getPedigree(e.netkeibaHorseId) : null;
       // 状況別の適性（血統の推定は今回と同じ芝ダの産駒成績から）
       const pedLookup =
@@ -509,7 +659,7 @@ export class ScoreService {
             })()
           : null,
         aptitudeMatrix,
-        components: { recent, aptitude, jockey, matchup, history, state, closing, margin, speed },
+        components: { recent, aptitude, jockey, matchup, history, state, closing, margin, speed, frame, change, layoff },
       };
     });
 

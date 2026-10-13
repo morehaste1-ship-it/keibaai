@@ -86,6 +86,9 @@ const COMPONENT_COLORS: Record<string, string> = {
   closing: 'bg-pink-400',
   margin: 'bg-lime-400',
   speed: 'bg-cyan-400',
+  frame: 'bg-orange-400',
+  change: 'bg-indigo-400',
+  layoff: 'bg-yellow-200',
 };
 
 /** 保存済みの配分を読み、無い項目（新しく増えた項目など）は既定値で補う */

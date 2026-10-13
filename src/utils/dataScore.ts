@@ -3,7 +3,7 @@
  */
 import type { AptitudeMatrixView, PredictionMark } from '../types/keiba';
 
-export type ComponentKey = 'recent' | 'aptitude' | 'jockey' | 'matchup' | 'history' | 'state' | 'closing' | 'margin' | 'speed';
+export type ComponentKey = 'recent' | 'aptitude' | 'jockey' | 'matchup' | 'history' | 'state' | 'closing' | 'margin' | 'speed' | 'frame' | 'change' | 'layoff';
 
 export const COMPONENT_LABELS: Record<ComponentKey, string> = {
   recent: '近走',
@@ -15,11 +15,14 @@ export const COMPONENT_LABELS: Record<ComponentKey, string> = {
   closing: '末脚',
   margin: '着差',
   speed: 'スピード',
+  frame: '枠',
+  change: '条件替わり',
+  layoff: '休み明け',
 };
 
-export const COMPONENT_KEYS: ComponentKey[] = ['recent', 'aptitude', 'jockey', 'matchup', 'history', 'state', 'closing', 'margin', 'speed'];
+export const COMPONENT_KEYS: ComponentKey[] = ['recent', 'aptitude', 'jockey', 'matchup', 'history', 'state', 'closing', 'margin', 'speed', 'frame', 'change', 'layoff'];
 /** データ不足の判定に数えない項目（あとから追加し、データがそろうまで時間がかかる項目。既存の判定を変えないため） */
-const NOT_COUNTED_FOR_SHORTAGE: ComponentKey[] = ['closing', 'margin', 'speed'];
+const NOT_COUNTED_FOR_SHORTAGE: ComponentKey[] = ['closing', 'margin', 'speed', 'frame', 'change', 'layoff'];
 
 export interface ScoreComponent {
   score: number;
@@ -241,6 +244,39 @@ export const COMPONENT_DESCRIPTIONS: Record<ComponentKey, ComponentDescription> 
       '走数が10走未満の条件は、馬場を問わない → 競馬場を問わない の順に広げて計算',
       '直近5走のうち良いほうの2走の平均。1000mあたり基準と同じで50点、1秒速いと+25点（1走だけの馬は差を半分に）',
       '走破タイムか基準タイムが無い馬は中立の50点',
+      '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
+    ],
+  },
+  frame: {
+    summary: '枠の有利不利。今回のコースで、内枠・中枠・外枠のどこが3着以内に来やすいかです。',
+    source: 'DBにたまった全馬の過去走（同じ競馬場・芝ダート・距離、過去5年、レース日より前の走だけ）',
+    lines: [
+      '枠を 内(1-3)・中(4-6)・外(7-8) に分け、今回の枠グループの3着以内率をコース全体の率と比べる',
+      '全体と同じで50点。全体より1割高いと+20点（例：全体30%で33%なら70点）',
+      '走数が少ない枠グループは、全体の率で「仮の50走」を足して補正',
+      'コースの過去走が100走未満、または枠番が未発表なら中立の50点',
+      '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
+    ],
+  },
+  change: {
+    summary: '条件替わり。前走から芝ダートや距離が変わるとき、その馬が過去に同じ変化をしたときの成績です。',
+    source: 'netkeiba の馬の過去走（芝ダート・距離・着順）',
+    lines: [
+      '変化の種類：芝→ダート／ダート→芝／距離延長（200m以上）／距離短縮（200m以上）',
+      'その馬の過去の同じ変化での3着以内率を、その馬のふだんの3着以内率と比べる（同じで50点、10ポイント高いと+20点）',
+      '回数が少ない馬は、ふだんの率で「仮のレース」を足して補正（馬の補正の強さと同じ）',
+      '前走から大きな変化がなければ50点。初めての変化、出走歴なしなら中立の50点',
+      '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
+    ],
+  },
+  layoff: {
+    summary: '休み明け。前走から91日以上あいたとき、その馬が過去の休み明けでどうだったかです。',
+    source: 'netkeiba の馬の過去走（日付・着順）と、DBにたまった全馬の過去走（休み明け全体の傾向）',
+    lines: [
+      'その馬の過去の休み明けの3着以内率を、その馬のふだんの3着以内率と比べる（同じで50点、10ポイント高いと+20点）',
+      '初めての休み明けは、全体の傾向（休み明けはふだんより何割成績が落ちるか）で見積もる',
+      '休み明けでなければ50点。出走歴なしなら中立の50点',
+      '「状態」の項目にも休み明けの −10 があります（配分の見直しで、どちらが効くかを確かめます）',
       '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
     ],
   },
