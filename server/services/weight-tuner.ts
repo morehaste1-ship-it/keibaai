@@ -161,6 +161,17 @@ export function tuneWeights(samples: TuneSample[], current: Weights): TuneResult
 export function runWeightReview(repo: RaceRepository, opts: { dryRun?: boolean } = {}): { result: TuneResult; version: WeightVersion | null } {
   const current = activeWeights(repo);
   const result = tuneWeights(buildSamples(repo.listScoredRecordsWithOutcome()), current);
+  // 実際の予想で成績が下がって自動で戻した配分は、もう一度採用しない
+  if (result.adopted && result.candidate) {
+    const same = (w: unknown) =>
+      !!w && typeof w === 'object' && COMPONENT_KEYS.every((k) => ((w as Weights)[k] ?? 0) === (result.candidate![k] ?? 0));
+    if (repo.listWeightVersions().some((v) => v.reason === 'auto-revert' && same((v.metrics as any)?.rejected))) {
+      return {
+        result: { ...result, adopted: false, message: `${result.message}。ただし、この配分は以前に実際の予想で成績が下がって自動で戻したため、採用しません` },
+        version: null,
+      };
+    }
+  }
   if (!result.adopted || !result.candidate || opts.dryRun) return { result, version: null };
   const version = repo.addWeightVersion({
     weights: result.candidate,
@@ -178,4 +189,93 @@ export function revertWeights(repo: RaceRepository): WeightVersion {
   const prevWeights = versions[1]?.weights ?? { ...DEFAULT_WEIGHTS };
   const label = versions[1] ? `${versions[1].adoptedAt.slice(0, 10)} の配分` : '既定の配分';
   return repo.addWeightVersion({ weights: prevWeights, reason: 'revert', note: `1つ前（${label}）に戻しました`, metrics: null });
+}
+
+// ---------------- 実際の予想の見張り（採用した配分で、前日・当日の予想の成績が下がっていないか） ----------------
+
+/** 比べるのに必要な実際のレース数（今の版・前の版それぞれ） */
+export const LIVE_MIN_RACES = 50;
+/** 前の版よりこのポイント以上低ければ、自動で前の配分に戻す */
+export const LIVE_MAX_DROP = 2;
+
+export interface LiveStat {
+  versionId: number;
+  races: number;
+  /** 3着以内の馬が、その予想の上位5頭に入った割合（%）。レースが無ければ null */
+  top3InTop5: number | null;
+}
+
+/** 記録した時点で採用中だった配分の版（0 = 既定の配分）。版の番号を保存する前の記録に使う */
+function versionAt(versionsAsc: WeightVersion[], recordedAt: string): number {
+  let id = 0;
+  for (const v of versionsAsc) if (v.adoptedAt <= recordedAt) id = v.id;
+  return id;
+}
+
+/** 版ごとの実際の予想（当日の自動 > 前日予想、1レース1件）の成績 */
+export function liveStatsByVersion(repo: RaceRepository): Map<number, LiveStat> {
+  const versionsAsc = [...repo.listWeightVersions()].reverse();
+  const byRace = new Map<string, { record: PredictionRecord; outcome: RaceOutcome }>();
+  for (const r of repo.listScoredRecordsWithOutcome()) {
+    if (r.record.source !== 'auto' && r.record.source !== 'eve') continue;
+    const prev = byRace.get(r.record.raceKey);
+    if (!prev || (prev.record.source === 'eve' && r.record.source === 'auto')) byRace.set(r.record.raceKey, r);
+  }
+  const acc = new Map<number, { races: number; hit: number; top3: number }>();
+  for (const { record, outcome } of byRace.values()) {
+    const finish = new Map(outcome.finishes.map((f) => [f.horseNumber, f.finishPosition]));
+    const top3 = record.marks.filter((m) => {
+      const p = finish.get(m.horseNumber);
+      return typeof p === 'number' && p >= 1 && p <= 3;
+    });
+    if (top3.length < 3) continue;
+    const vid = record.settings.weightsVersionId ?? versionAt(versionsAsc, record.recordedAt);
+    const a = acc.get(vid) ?? { races: 0, hit: 0, top3: 0 };
+    a.races++;
+    a.top3 += top3.length;
+    a.hit += top3.filter((m) => m.rank <= TOP_N).length;
+    acc.set(vid, a);
+  }
+  const out = new Map<number, LiveStat>();
+  for (const [vid, a] of acc) out.set(vid, { versionId: vid, races: a.races, top3InTop5: a.top3 > 0 ? Math.round((a.hit / a.top3) * 1000) / 10 : null });
+  return out;
+}
+
+export interface LiveCheckResult {
+  reverted: boolean;
+  message: string;
+  current: LiveStat | null;
+  previous: LiveStat | null;
+  version: WeightVersion | null;
+}
+
+/**
+ * 今の版の実際の成績が、前の版より LIVE_MAX_DROP ポイント以上低ければ、自動で前の配分に戻す（履歴に「自動で戻した」として残す）。
+ * 今の版が「戻した」配分のとき・どちらかのレースが LIVE_MIN_RACES 未満のときは何もしない
+ */
+export function runLiveCheck(repo: RaceRepository, opts: { dryRun?: boolean } = {}): LiveCheckResult {
+  const versions = repo.listWeightVersions();
+  const none = (message: string, current: LiveStat | null = null, previous: LiveStat | null = null): LiveCheckResult => ({ reverted: false, message, current, previous, version: null });
+  if (versions.length === 0) return none('既定の配分のままのため、比べる版がありません');
+  const cur = versions[0];
+  if (cur.reason === 'revert' || cur.reason === 'auto-revert') return none('今の配分は「戻した」配分のため、比べません');
+  const prevId = versions[1]?.id ?? 0;
+  const stats = liveStatsByVersion(repo);
+  const c = stats.get(cur.id) ?? { versionId: cur.id, races: 0, top3InTop5: null };
+  const p = stats.get(prevId) ?? { versionId: prevId, races: 0, top3InTop5: null };
+  if (c.races < LIVE_MIN_RACES || p.races < LIVE_MIN_RACES || c.top3InTop5 === null || p.top3InTop5 === null) {
+    return none(`実際のレースが足りないため比べません（今の版 ${c.races}レース・前の版 ${p.races}レース。それぞれ${LIVE_MIN_RACES}レース以上で比べます）`, c, p);
+  }
+  if (c.top3InTop5 > p.top3InTop5 - LIVE_MAX_DROP) {
+    return none(`問題なし（実際の成績：前の版 ${p.top3InTop5}% → 今の版 ${c.top3InTop5}%）`, c, p);
+  }
+  const message = `実際の予想で成績が下がったため、前の配分に自動で戻しました（3着以内の馬が上位5頭に入った割合：前の版 ${p.top3InTop5}%・${p.races}レース → 今の版 ${c.top3InTop5}%・${c.races}レース）`;
+  if (opts.dryRun) return { reverted: false, message: `${message}（--dry のため戻していません）`, current: c, previous: p, version: null };
+  const version = repo.addWeightVersion({
+    weights: versions[1]?.weights ?? { ...DEFAULT_WEIGHTS },
+    reason: 'auto-revert',
+    note: message,
+    metrics: { live: { current: c, previous: p }, rejected: cur.weights },
+  });
+  return { reverted: true, message, current: c, previous: p, version };
 }

@@ -14,7 +14,7 @@ import { HistoryService } from './server/services/history-service.ts';
 import { JockeyService } from './server/services/jockey-service.ts';
 import { HorseService } from './server/services/horse-service.ts';
 import { ScoreService, MAX_HORSE_K, MAX_JOCKEY_K, activeWeights } from './server/services/score-service.ts';
-import { revertWeights } from './server/services/weight-tuner.ts';
+import { liveStatsByVersion, revertWeights } from './server/services/weight-tuner.ts';
 import { buildCommentaryPrompt, buildDeliberationPrompt, sanitizeDeliberation, sanitizePayload, withGeminiRetry } from './server/services/commentary.ts';
 import { acquireLock, lockHeldByOther, releaseLock } from './server/services/crawl-lock.ts';
 
@@ -574,7 +574,9 @@ app.post('/api/review/outcome/:raceKey', async (req, res) => {
 // 配分の自動見直し：採用中の配分と履歴
 app.get('/api/weights', (req, res) => {
   try {
-    res.json({ status: 'success', current: activeWeights(repo), versions: repo.listWeightVersions() });
+    // 版ごとの実際の予想の成績（0 = 既定の配分）
+    const live = Object.fromEntries([...liveStatsByVersion(repo)].map(([id, s]) => [id, s]));
+    res.json({ status: 'success', current: activeWeights(repo), versions: repo.listWeightVersions(), live });
   } catch (error: any) {
     res.status(500).json({ status: 'error', error: error.message || '配分の読み込みに失敗しました' });
   }

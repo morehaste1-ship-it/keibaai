@@ -133,6 +133,8 @@ export interface PredictionRecord {
     paceForecast?: { pace: string; favored: string[] };
     /** 記録に使った単勝オッズの段階（forecast = 予想オッズ、live = 発売中、final = 確定、null = オッズなし）。古い記録には無い */
     oddsKind?: 'final' | 'live' | 'forecast' | null;
+    /** 記録したときに採用中だった配分の版（0 = 既定の配分）。古い記録には無い */
+    weightsVersionId?: number;
   };
   marks: {
     horseNumber: number;

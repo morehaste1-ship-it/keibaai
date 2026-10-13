@@ -27,7 +27,9 @@ export async function runPastStage(repo: RaceRepository, opts: PastRunOptions = 
   const dbSource = new NetkeibaSource(createDbFetcher(repo));
   const review = new ReviewService(repo, new ScoreService(repo), raceSource);
   const service = new PastService(repo, new JraCalendar(), raceSource, dbSource, review);
-  console.log(`[Past] start（${opts.fromDate ?? '2021-01-01'} までさかのぼる・上限 出馬表/結果${opts.maxRacePages ?? 1500}ページ・馬${opts.maxHorsePages ?? 2000}ページ）`);
+  console.log(
+    `[Past] start（${opts.fromDate ?? '2021-01-01'} までさかのぼる・上限 出馬表/結果${opts.maxRacePages ?? 1500}ページ・馬${opts.maxHorsePages ?? 2000}ページ・血統${opts.maxPedigreePages ?? 600}ページ）`,
+  );
   const shortage = diskShortage();
   if (shortage) {
     console.log(`[Past] 中止: ${shortage}`);
@@ -37,7 +39,7 @@ export async function runPastStage(repo: RaceRepository, opts: PastRunOptions = 
   const s = repo.pastSummary();
   console.log(
     `[Past] done: 確認した日${r.datesChecked}・取り込み${r.racesImported}レース・失敗${r.racesFailed}・予想し直し${r.racesPredicted}レース／` +
-      `出馬表・結果${r.racePages}ページ・馬${r.horsePages}ページ` +
+      `出馬表・結果${r.racePages}ページ・馬${r.horsePages}ページ・血統${r.pedigreePages}ページ（${r.pedigreesFetched}頭）` +
       (r.stoppedReason ? ` / ${r.stoppedReason}` : ''),
   );
   console.log(

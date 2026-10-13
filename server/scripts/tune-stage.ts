@@ -3,11 +3,18 @@
  */
 import type { RaceRepository } from '../db/repository';
 import { COMPONENT_KEYS, COMPONENT_LABELS } from '../../src/utils/dataScore';
-import { buildSamples, evaluateWeights, runWeightReview } from '../services/weight-tuner';
+import { buildSamples, evaluateWeights, runLiveCheck, runWeightReview } from '../services/weight-tuner';
 
 const fmt = (w: Record<string, number>) => COMPONENT_KEYS.map((k) => `${COMPONENT_LABELS[k]}${w[k]}`).join('・');
 
 export function logWeightReview(repo: RaceRepository, opts: { dryRun?: boolean } = {}): void {
+  // 先に、今の配分で実際の予想の成績が下がっていないかを確かめる（下がっていれば自動で戻し、今週の見直しはしない）
+  const live = runLiveCheck(repo, opts);
+  console.log(`[Tune] 実際の予想の見張り: ${live.message}`);
+  if (live.reverted) {
+    console.log(`[Tune] 前の配分に戻したため（版 ${live.version?.id}）、今週の配分の見直しは行いません`);
+    return;
+  }
   const { result, version } = runWeightReview(repo, opts);
   console.log(`[Tune] 対象 ${result.races}レース／今の配分: ${fmt(result.current)}`);
   if (result.train && result.holdout) {

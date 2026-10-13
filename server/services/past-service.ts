@@ -5,7 +5,8 @@
  *  1. その日の開催を確認（レース一覧ページ）
  *  2. 各レースの出馬表・結果（着順・4角・上がり・払戻）・確定単勝オッズを保存（1レース2ページ）
  *  3. 出走馬の過去走ページを取得（まだ一度も取っていない馬だけ）
- *  4. 出走馬がそろったレースから、既定の配分で予想し直して「検証用（backtest）」として記録
+ *  4. 出走時点で出走数が3走未満の馬（新馬・2歳など）は、血統と父・母の父の産駒成績も取得（適性の推定に使う）
+ *  5. 出走馬がそろったレースから、採用中の配分で予想し直して「検証用（backtest）」として記録
  *
  * - 点数はレース日より前の成績だけで計算するため、結果は予想に混ざらない
  * - 人気は確定オッズ（当日の朝・前日の予想とは異なる）。血統（産駒成績）は今の累計のため、わずかに未来の情報を含む
@@ -16,6 +17,7 @@ import type { RaceRepository } from '../db/repository';
 import type { NetkeibaSource } from '../sources/netkeiba';
 import type { JraCalendar } from '../sources/jra-calendar';
 import { HorseService } from './horse-service';
+import { PedigreeService, PEDIGREE_MIN_RUNS } from './pedigree-service';
 import type { ReviewService } from './review-service';
 
 /** どこまでさかのぼるか（既定。騎手成績の取得範囲と同じ約5年） */
@@ -31,6 +33,8 @@ export interface PastRunOptions {
   maxRacePages?: number;
   /** db.netkeiba.com（馬の過去走）の上限ページ数 */
   maxHorsePages?: number;
+  /** db.netkeiba.com（血統・産駒成績）の上限ページ数 */
+  maxPedigreePages?: number;
   /** この日までさかのぼる（YYYY-MM-DD） */
   fromDate?: string;
   /** この日より前から始める（既定は今日。今日より前の日だけが対象） */
@@ -46,6 +50,8 @@ export interface PastRunResult {
   racesPredicted: number;
   racePages: number;
   horsePages: number;
+  pedigreePages: number;
+  pedigreesFetched: number;
   rateLimited: boolean;
   stoppedReason: string | null;
   errors: string[];
@@ -58,6 +64,9 @@ function ymd(d: Date): string {
 const isRateLimited = (err: any) => err?.name === 'RateLimitedError';
 
 export class PastService {
+  /** この実行で血統の取得を試みた馬（取れなかった馬で何度も止まらないように） */
+  private readonly pedigreeTried = new Set<string>();
+
   constructor(
     private readonly repo: RaceRepository,
     private readonly calendar: JraCalendar,
@@ -88,6 +97,7 @@ export class PastService {
     const errors: string[] = [];
     for (const p of this.repo.listPastRaces('imported')) {
       if (this.pendingHorsesOf(p.raceKey).length > 0 && p.horseAttempts < MAX_HORSE_ATTEMPTS) continue;
+      if (this.pendingPedigreeOf(p.raceKey).length > 0) continue;
       try {
         this.review.recordAuto(p.raceKey, new Date(), 'backtest');
         this.repo.setPastRace(p.raceKey, 'predicted');
@@ -119,6 +129,22 @@ export class PastService {
     return { total: keys.length, done, errors };
   }
 
+  /** そのレースの出走馬のうち、出走時点の出走数が3走未満で、血統が未取得（この実行でまだ試していない）の馬 */
+  private pendingPedigreeOf(raceKey: string): string[] {
+    const race = this.repo.getRace(raceKey);
+    if (!race) return [];
+    return this.repo
+      .getEntries(raceKey)
+      .map((e) => e.netkeibaHorseId)
+      .filter(
+        (id): id is string =>
+          !!id &&
+          !this.pedigreeTried.has(id) &&
+          !this.repo.getPedigree(id) &&
+          this.repo.listHorseRuns(id).filter((r) => r.date < race.date).length < PEDIGREE_MIN_RUNS,
+      );
+  }
+
   /** そのレースの出走馬のうち、過去走をまだ一度も取得していない馬 */
   private pendingHorsesOf(raceKey: string): string[] {
     return this.repo
@@ -132,6 +158,7 @@ export class PastService {
     const today = opts.today ?? new Date();
     const maxRacePages = opts.maxRacePages ?? 1500;
     const maxHorsePages = opts.maxHorsePages ?? 2000;
+    const maxPedigreePages = opts.maxPedigreePages ?? 600;
     const res: PastRunResult = {
       datesChecked: 0,
       racesImported: 0,
@@ -139,12 +166,15 @@ export class PastService {
       racesPredicted: 0,
       racePages: 0,
       horsePages: 0,
+      pedigreePages: 0,
+      pedigreesFetched: 0,
       rateLimited: false,
       stoppedReason: null,
       errors: [],
     };
     const timeUp = () => opts.deadline !== undefined && Date.now() >= opts.deadline;
     const horseService = new HorseService(this.dbSource, this.repo);
+    const pedigreeService = new PedigreeService(this.dbSource, this.repo);
     // 出馬表・結果の取り込みを止めたか（上限・終わり・失敗）。止めたあとも、取り込み済みレースの馬の取得と予想は続ける
     let importStopped = false;
 
@@ -186,6 +216,32 @@ export class PastService {
           if (st.stoppedReason && !st.stoppedReason.startsWith('1回の上限')) {
             res.stoppedReason = st.stoppedReason;
             if (timeUp() || st.stoppedReason.includes('エラー')) break;
+          }
+          continue;
+        }
+
+        // 出走時点で3走未満の馬の血統（過去走がそろったレースから）
+        const pedPending = [...new Set(this.repo.listPastRaces('imported').flatMap((p) => this.pendingPedigreeOf(p.raceKey)))];
+        if (pedPending.length > 0) {
+          if (res.pedigreePages >= maxPedigreePages) {
+            // 上限に達したら、血統待ちのレースが増えないよう取り込みも止める（次回は血統から続ける）
+            res.stoppedReason = `血統の上限（${maxPedigreePages}ページ）に達したため、続きは次回取得します`;
+            break;
+          }
+          const chunk = pedPending.slice(0, HORSE_CHUNK);
+          for (const id of chunk) this.pedigreeTried.add(id);
+          const st = await pedigreeService.crawl(chunk, maxPedigreePages - res.pedigreePages, opts.deadline);
+          res.pedigreePages += st.pagesFetched;
+          res.pedigreesFetched += st.pedigreesFetched;
+          res.errors.push(...st.errors.map((e) => `血統 ${e}`));
+          if (st.rateLimited) {
+            res.rateLimited = true;
+            res.stoppedReason = st.stoppedReason;
+            break;
+          }
+          if (timeUp()) {
+            res.stoppedReason = '終了時刻になったため、続きは次回取得します';
+            break;
           }
           continue;
         }

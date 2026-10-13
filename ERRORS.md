@@ -54,3 +54,11 @@
 失敗: `rclone config rename googledrive gdrive` を案内したが、v1.75.2 にはこのサブコマンドが無く失敗（直前の `rclone config delete gdrive` は実行済み）
 成功: 対話式の `rclone config` のメニュー「r) Rename remote」で名前を変える
 教訓: 外部ツールのコマンドは、手元で試せないときは `--help` の一覧で存在を確かめてから案内する（使えるサブコマンド：create / delete / reconnect / update など。rename は無い）
+
+## GitHub 初回登録の確認コマンド
+失敗: 上げてはいけないファイルの確認で「data/」を含むパスを一律に検出したため、プログラムの一部の src/data/courses.ts まで「含まれてはいけない」と表示した（.gitignore 自体は正しく、ルート直下の /data/ だけを除外していた）
+成功: 確認をルート直下の data/・logs/ と .env・.sqlite・.zip に限定した
+教訓: 除外の確認は .gitignore と同じ範囲（ルート直下か、どこでもか）で書く。プロジェクト内に同名のフォルダ（src/data・server/data）が無いか先に確かめる
+追記（同日・2回目の失敗）: 直した確認でも「^A  (\.env|…)」が .env.example（キーを含まないひな形）に前方一致して誤検出した。試験用のフォルダに .env.example を置いていなかったため見落とした
+成功: .env は「^A  \.env$」と完全一致で調べ、.env.example は中身に実際のキー（Gemini のキーは AIza で始まる）が無いことを別に確かめる
+教訓: 確認コマンドの試験には、本番と同じ紛らわしいファイル名（.env.example など）も必ず含める

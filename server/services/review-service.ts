@@ -101,7 +101,12 @@ export class ReviewService {
       raceKey,
       source,
       recordedAt: now.toISOString(),
-      settings: { ...settings, paceForecast: { pace: pace.pace, favored: pace.favored }, oddsKind: latestOdds?.kind ?? null },
+      settings: {
+        ...settings,
+        paceForecast: { pace: pace.pace, favored: pace.favored },
+        oddsKind: latestOdds?.kind ?? null,
+        weightsVersionId: this.repo.getActiveWeightVersion()?.id ?? 0,
+      },
       marks: ranked
         .filter((r) => r.horseNumber !== null)
         .map((r) => ({

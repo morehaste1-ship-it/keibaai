@@ -6,6 +6,7 @@
  *   --hours N         N時間で止める（既定: 上限ページ数に達するまで）
  *   --race-pages N    出馬表・結果の上限ページ数（既定 1500。1レース2ページ）
  *   --horse-pages N   馬の過去走の上限ページ数（既定 2000。5秒間隔で約2.8時間）
+ *   --pedigree-pages N 血統・産駒成績の上限ページ数（既定 600。出走時点で3走未満の馬だけ）
  *   --from YYYY-MM-DD この日までさかのぼる（既定 2021-01-01）
  *   --rescore         取得はせず、予想し直し済みの過去レースを今の計算（追加した項目を含む）で記録し直す
  * 途中で止めても（Ctrl+C）、取り込み済みの分は保存され、次回は続きから
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
     deadline: hours ? Date.now() + hours * 3600 * 1000 : undefined,
     maxRacePages: positive('race-pages'),
     maxHorsePages: positive('horse-pages'),
+    maxPedigreePages: positive('pedigree-pages'),
     fromDate: from,
   };
   if (!acquireLock('past')) {
