@@ -1,0 +1,23 @@
+# プログラムの部品・ビルドの出力
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+.DS_Store
+
+# 秘密の情報（Gemini の API キーなど）。.env.example（ひな形）だけは含める
+.env
+.env.*
+!.env.example
+
+# データ（データベース・バックアップ・ページの写し）と記録。netkeiba から取得したデータは GitHub に置かない
+/data/
+*.sqlite
+*.sqlite-*
+/logs/
+*.log
+
+# 配布用の zip と、1回限りのスクリプト
+*.zip
+after-nightly-*.sh

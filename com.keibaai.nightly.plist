@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.keibaai.nightly</string>
+
+  <!-- 毎日1:00に夜間ジョブを実行（金曜だけ週末の出馬表・オッズも取得）。6:00で止めて続きは翌晩。ログは日付ごと -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>cd /Users/tsuchiyayuri/keibaai &amp;&amp; /usr/bin/caffeinate -i /usr/local/bin/npm run nightly &gt;&gt; logs/nightly-$(date +%Y%m%d).log 2&gt;&amp;1</string>
+  </array>
+
+  <!-- npm が node を見つけられるように PATH を指定 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <!-- 毎日 1:00（Mac のローカル時間） -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>1</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/tsuchiyayuri/keibaai/logs/launchd-error.log</string>
+</dict>
+</plist>

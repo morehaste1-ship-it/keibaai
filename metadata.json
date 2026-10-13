@@ -1,0 +1,6 @@
+{
+  "name": "KeibaAI Pro - 競馬AI予想＆展開血統分析エンジン",
+  "description": "過去レースデータ、血統適性、天候・馬場状態、競馬場ごとのコース補正値を統合分析する競馬AI予想アプリ。本命(◎)から大穴(☆)までの印の自動生成、展開・ハナ切り馬分析、中穴・大穴買い目提案機能を搭載。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

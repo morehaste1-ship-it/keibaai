@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.keibaai.batch</string>
+
+  <!-- 作業フォルダに移動し、caffeinate でスリープを防ぎながら batch を実行。ログは日付ごとに保存 -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>cd /Users/tsuchiyayuri/keibaai &amp;&amp; /usr/bin/caffeinate -i /usr/local/bin/npm run batch &gt;&gt; logs/batch-$(date +%Y%m%d).log 2&gt;&amp;1</string>
+  </array>
+
+  <!-- npm が node を見つけられるように PATH を指定 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <!-- 毎週木曜 21:00（Mac のローカル時間） -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>4</integer>
+    <key>Hour</key>
+    <integer>21</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/tsuchiyayuri/keibaai/logs/launchd-error.log</string>
+</dict>
+</plist>
