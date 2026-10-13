@@ -892,6 +892,21 @@ export class RaceRepository {
     return new Set((this.db.prepare('SELECT date FROM past_dates').all() as { date: string }[]).map((r) => r.date));
   }
 
+  /**
+   * 確認済みの日の記録（race_count がマイナスなら「土日なのに開催0件」だった回数で、要再確認）
+   */
+  getPastDate(date: string): { raceCount: number; checkedAt: string } | null {
+    const r = this.db.prepare('SELECT race_count, checked_at FROM past_dates WHERE date = ?').get(date) as any;
+    return r ? { raceCount: r.race_count, checkedAt: r.checked_at } : null;
+  }
+
+  /** 要再確認の日（土日なのに開催0件だった日）のうち、指定日時より前に確認した日（新しい順） */
+  listRecheckPastDates(checkedBefore: string): string[] {
+    return (
+      this.db.prepare('SELECT date FROM past_dates WHERE race_count < 0 AND checked_at < ? ORDER BY date DESC').all(checkedBefore) as { date: string }[]
+    ).map((r) => r.date);
+  }
+
   markPastDate(date: string, raceCount: number): void {
     this.db
       .prepare('INSERT OR REPLACE INTO past_dates (date, race_count, checked_at) VALUES (?, ?, ?)')
@@ -927,11 +942,11 @@ export class RaceRepository {
   }
 
   /** 取り込み状況の集計（ログ用） */
-  pastSummary(): { byStatus: Record<string, number>; checkedDates: number; raceDays: number; oldestDate: string | null } {
+  pastSummary(): { byStatus: Record<string, number>; checkedDates: number; raceDays: number; recheckDates: number; oldestDate: string | null } {
     const byStatus: Record<string, number> = {};
     for (const r of this.db.prepare('SELECT status, COUNT(*) AS n FROM past_races GROUP BY status').all() as any[]) byStatus[r.status] = r.n;
-    const d = this.db.prepare('SELECT COUNT(*) AS n, SUM(race_count > 0) AS days, MIN(date) AS oldest FROM past_dates').get() as any;
-    return { byStatus, checkedDates: d.n ?? 0, raceDays: d.days ?? 0, oldestDate: d.oldest ?? null };
+    const d = this.db.prepare('SELECT COUNT(*) AS n, SUM(race_count > 0) AS days, SUM(race_count < 0) AS recheck, MIN(date) AS oldest FROM past_dates').get() as any;
+    return { byStatus, checkedDates: d.n ?? 0, raceDays: d.days ?? 0, recheckDates: d.recheck ?? 0, oldestDate: d.oldest ?? null };
   }
 
   /** 予想の記録があるか（種類を問わない） */

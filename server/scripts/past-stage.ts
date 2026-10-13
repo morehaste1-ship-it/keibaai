@@ -44,7 +44,7 @@ export async function runPastStage(repo: RaceRepository, opts: PastRunOptions = 
   );
   console.log(
     `[Past] 累計: 予想し直し済み${s.byStatus.predicted ?? 0}・馬の取得待ち${s.byStatus.imported ?? 0}・失敗${s.byStatus.failed ?? 0}レース／` +
-      `確認済み${s.checkedDates}日（開催${s.raceDays}日）・最も古い日 ${s.oldestDate ?? '-'}`,
+      `確認済み${s.checkedDates}日（開催${s.raceDays}日${s.recheckDates > 0 ? `・要再確認${s.recheckDates}日` : ''}）・最も古い日 ${s.oldestDate ?? '-'}`,
   );
   for (const e of r.errors.slice(0, 30)) console.log(`[Past] NG ${e}`);
   if (r.errors.length > 30) console.log(`[Past] NG ほか${r.errors.length - 30}件`);

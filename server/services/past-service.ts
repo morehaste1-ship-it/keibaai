@@ -24,6 +24,8 @@ import type { ReviewService } from './review-service';
 export const DEFAULT_PAST_FROM = '2021-01-01';
 /** 出走馬の過去走の取得を何回試みたら、取れない馬がいても予想するか */
 const MAX_HORSE_ATTEMPTS = 2;
+/** 土日なのに開催0件だった日を、何回確認したら「開催なし」と確定するか（それまでは毎回の実行で確認し直す） */
+export const MAX_EMPTY_WEEKEND_CHECKS = 3;
 /** 1回にまとめて取得する馬の数 */
 const HORSE_CHUNK = 100;
 
@@ -62,6 +64,8 @@ function ymd(d: Date): string {
 }
 
 const isRateLimited = (err: any) => err?.name === 'RateLimitedError';
+/** 土曜・日曜か（YYYY-MM-DD） */
+const isWeekend = (date: string) => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay());
 
 export class PastService {
   /** この実行で血統の取得を試みた馬（取れなかった馬で何度も止まらないように） */
@@ -177,6 +181,8 @@ export class PastService {
     const pedigreeService = new PedigreeService(this.dbSource, this.repo);
     // 出馬表・結果の取り込みを止めたか（上限・終わり・失敗）。止めたあとも、取り込み済みレースの馬の取得と予想は続ける
     let importStopped = false;
+    // 要再確認の日（土日なのに開催0件だった日）。この実行より前に確認した日だけを、1回ずつ確認し直す
+    const recheckQueue = this.repo.listRecheckPastDates(new Date().toISOString());
 
     try {
       for (;;) {
@@ -253,7 +259,7 @@ export class PastService {
           importStopped = true;
           continue;
         }
-        const date = this.nextDate(fromDate, today);
+        const date = recheckQueue.shift() ?? this.nextDate(fromDate, today);
         if (!date) {
           res.stoppedReason = `${fromDate} までの取り込みが終わりました`;
           importStopped = true;
@@ -322,6 +328,19 @@ export class PastService {
         res.errors.push(`${race.raceId}: ${err?.message ?? err}`);
         if (raceKey) this.repo.setPastRace(raceKey, 'failed', err?.message ?? String(err));
       }
+    }
+    if (races.length === 0 && isWeekend(date)) {
+      // 土日の開催0件は一時的な取得の失敗のことがあるため、すぐには確定しない（マイナスの回数で記録し、次回以降に確認し直す）
+      const prev = this.repo.getPastDate(date)?.raceCount ?? 0;
+      const misses = (prev < 0 ? -prev : 0) + 1;
+      if (misses >= MAX_EMPTY_WEEKEND_CHECKS) {
+        this.repo.markPastDate(date, 0);
+        res.errors.push(`${date}: 土日ですが開催0件でした（${misses}回確認したため「開催なし」と確定）`);
+      } else {
+        this.repo.markPastDate(date, -misses);
+        res.errors.push(`${date}: 土日ですが開催0件でした（${misses}回目。次回の実行でもう一度確認します）`);
+      }
+      return true;
     }
     this.repo.markPastDate(date, races.length);
     return true;

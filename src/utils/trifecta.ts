@@ -244,6 +244,10 @@ export function explainHorse(h: RankedItem, pace: PaceForecast | null): string[]
   // 着差・スピード（古いデータで項目が無い場合は表示しない）
   if (c.margin) lines.push(`着差：${c.margin.hasData ? `${c.margin.detail}（着差${c.margin.score}点）` : 'データなし'}`);
   if (c.speed) lines.push(`スピード：${c.speed.hasData ? `${c.speed.detail}（スピード${c.speed.score}点）` : 'データなし'}`);
+  // 枠・条件替わり・休み明け（古いデータで項目が無い場合は表示しない）
+  if (c.frame) lines.push(`枠：${c.frame.hasData ? `${c.frame.detail}（枠${c.frame.score}点）` : 'データなし'}`);
+  if (c.change) lines.push(`条件替わり：${c.change.hasData ? `${c.change.detail}（条件替わり${c.change.score}点）` : 'データなし'}`);
+  if (c.layoff) lines.push(`休み明け：${c.layoff.hasData ? `${c.layoff.detail}（休み明け${c.layoff.score}点）` : 'データなし'}`);
   // 展開
   if (pace) {
     if (!h.mainStyle) {
