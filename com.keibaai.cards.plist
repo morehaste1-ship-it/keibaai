@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.keibaai.cards</string>
+
+  <!-- 作業フォルダに移動し、caffeinate でスリープを防ぎながら日中の出馬表の取り込みを実行。ログは日付ごとに保存 -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>cd /Users/tsuchiyayuri/keibaai &amp;&amp; /usr/bin/caffeinate -i /usr/local/bin/npx tsx server/scripts/run-cards.ts &gt;&gt; logs/cards-$(date +%Y%m%d).log 2&gt;&amp;1</string>
+  </array>
+
+  <!-- npx が node を見つけられるように PATH を指定 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <!-- 毎日 10:40・13:00（前日10時すぎの枠順発表に合わせる）、木曜 14:30・16:00（G1など早い発表）。Mac のローカル時間 -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key><integer>10</integer>
+      <key>Minute</key><integer>40</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>13</integer>
+      <key>Minute</key><integer>0</integer>
+    </dict>
+    <dict>
+      <key>Weekday</key><integer>4</integer>
+      <key>Hour</key><integer>14</integer>
+      <key>Minute</key><integer>30</integer>
+    </dict>
+    <dict>
+      <key>Weekday</key><integer>4</integer>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>0</integer>
+    </dict>
+  </array>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/tsuchiyayuri/keibaai/logs/cards-launchd-error.log</string>
+</dict>
+</plist>
