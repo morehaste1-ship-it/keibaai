@@ -840,6 +840,22 @@ export class RaceRepository {
   }
 
   /** レースの取得元ID（netkeiba のレースID）を返す。未登録なら null */
+  /** 馬場が空のレース（指定日より前・古い順） */
+  listRacesWithoutCondition(beforeDate: string): { raceKey: string; date: string; name: string; venueName: string; raceNo: number }[] {
+    return (
+      this.db
+        .prepare('SELECT race_key, date, name, venue_name, race_no FROM races WHERE track_condition IS NULL AND date < ? ORDER BY date, race_key')
+        .all(beforeDate) as any[]
+    ).map((r) => ({ raceKey: r.race_key, date: r.date, name: r.name, venueName: r.venue_name, raceNo: r.race_no }));
+  }
+
+  /** レースの馬場が空のときだけ埋める（入っていれば上書きしない）。埋めたら true */
+  fillRaceTrackCondition(raceKey: string, condition: string): boolean {
+    if (!['良', '稍重', '重', '不良'].includes(condition)) return false;
+    const r = this.db.prepare('UPDATE races SET track_condition = ? WHERE race_key = ? AND track_condition IS NULL').run(condition, raceKey);
+    return r.changes > 0;
+  }
+
   findRaceSourceId(raceKey: string, source: SourceRef['source'] = 'netkeiba'): string | null {
     const row = this.db
       .prepare('SELECT source_id FROM source_ids WHERE entity = ? AND internal_key = ? AND source = ?')

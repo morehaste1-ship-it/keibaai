@@ -174,6 +174,8 @@ export class ReviewService {
       fetchedAt: new Date().toISOString(),
     };
     this.repo.saveRaceOutcome(outcome);
+    // 前日の出馬表では馬場が未発表のことがあるため、レースの馬場が空なら結果ページの馬場で埋める（入っていれば上書きしない）
+    if (result.trackCondition) this.repo.fillRaceTrackCondition(raceKey, result.trackCondition);
     return outcome;
   }
 
