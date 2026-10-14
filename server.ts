@@ -298,7 +298,7 @@ app.post('/api/history/collect', async (req, res) => {
 });
 
 // 保存済みの過去結果を分析する（DB読み取りのみ）
-// query: condition=良|稍重|重|不良（省略時はレースの馬場）
+// query: condition=all|良|稍重|重|不良（詳細を表示する馬場。省略時は全馬場）、raceCondition=今回の馬場（強調表示用）
 app.get('/api/history/analysis/:raceKey', (req, res) => {
   try {
     const { raceKey } = req.params;
@@ -306,14 +306,18 @@ app.get('/api/history/analysis/:raceKey', (req, res) => {
       return res.status(400).json({ status: 'error', error: 'raceKey の形式が不正です' });
     }
     const condition = req.query.condition as string | undefined;
-    if (condition !== undefined && !['良', '稍重', '重', '不良'].includes(condition)) {
-      return res.status(400).json({ status: 'error', error: 'condition は 良・稍重・重・不良 のいずれかです' });
+    if (condition !== undefined && !['all', '良', '稍重', '重', '不良'].includes(condition)) {
+      return res.status(400).json({ status: 'error', error: 'condition は all・良・稍重・重・不良 のいずれかです' });
+    }
+    const raceCondition = req.query.raceCondition as string | undefined;
+    if (raceCondition !== undefined && !['良', '稍重', '重', '不良'].includes(raceCondition)) {
+      return res.status(400).json({ status: 'error', error: 'raceCondition は 良・稍重・重・不良 のいずれかです' });
     }
     if (!repo.getRace(raceKey)) {
       return res.status(404).json({ status: 'error', error: '対象レースが未登録です' });
     }
 
-    const analysis = historyService.analyze(raceKey, condition);
+    const analysis = historyService.analyze(raceKey, condition, raceCondition);
     res.json({ status: 'success', analysis });
   } catch (error: any) {
     console.error('Error in /api/history/analysis:', error);

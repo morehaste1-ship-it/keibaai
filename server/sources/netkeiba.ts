@@ -408,9 +408,9 @@ export class NetkeibaSource implements RaceDataSource {
     const surface = surfaceMap[courseMatch[1]];
     const distance = parseInt(courseMatch[2], 10);
 
-    // 馬場状態（良・稍重・重・不良）。表記が見つからない場合は null
-    const condMatch = html.match(/馬場[：:]\s*(良|稍重|重|不良)/);
-    const trackCondition = condMatch?.[1] ?? null;
+    // 馬場状態（良・稍重・重・不良）。ページでは「稍」「不」と省略されることがある。表記が見つからない場合は null
+    const condMatch = html.match(/馬場[：:]\s*(良|稍重|稍|重|不良|不)/);
+    const trackCondition = normalizeCondition(condMatch?.[1] ?? null);
 
     // 結果テーブル（着順・馬名などの見出しを含む table）を探す
     const table = (html.match(/<table[\s\S]*?<\/table>/gi) || []).find(
@@ -1102,8 +1102,9 @@ export class NetkeibaSource implements RaceDataSource {
 
   private normalizeTrackCondition(text: string | null): TrackCondition | null {
     if (!text) return null;
+    // ページでは「稍」「不」と省略されることがある
     const map: Record<string, TrackCondition> = {
-      '良': '良', '稍重': '稍重', '重': '重', '不良': '不良',
+      '良': '良', '稍重': '稍重', '稍': '稍重', '重': '重', '不良': '不良', '不': '不良',
     };
     return map[text] || null;
   }

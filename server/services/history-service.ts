@@ -2,7 +2,9 @@
  * 過去同一レース（10年分）の収集と分析
  *
  * 「同じレース」= 競走名・会場・芝ダ・距離が一致するもの。
- * 馬場は収集時には絞らず全件保存し、分析時に条件として絞り込む（馬場が違う年も後で比較できるように）。
+ * 会場の改修などで別の会場で行われた年（代替開催）も、競走名・芝ダ・距離が一致すれば同じレースとして保存する（実際の会場も保存）。
+ * 開催日は年ごとにずれるため、同じ曜日に合わせた日から探し、見つからなければ前後2週間の土日月に広げる。
+ * 馬場は収集時には絞らず全件保存し、分析時に馬場ごとに集計する。
  */
 
 import type { NetkeibaSource } from '../sources/netkeiba';
@@ -32,6 +34,36 @@ function formatYmd(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/** 馬場の区分（分析の表示順） */
+export const TRACK_CONDITIONS = ['良', '稍重', '重', '不良'] as const;
+/** 何日先まで探すか（同じ曜日に合わせた日からの前後の日数） */
+const SEARCH_RANGE_DAYS = 15;
+/** 土日の開催一覧が空だったとき、もう一度読むまでの待ち時間（netkeiba が一時的に空を返すことがあるため） */
+const EMPTY_RETRY_WAIT_MS = 5000;
+/** 開催一覧が空で返り続けたことを表す印（この年以降の取得を止める） */
+const LIST_UNAVAILABLE = '開催一覧が取得できません';
+
+/**
+ * その年に探す日の一覧（近い順）。
+ * 基準のレース日と同じ曜日で、その年の同じ月日に最も近い日を起点に、前後 SEARCH_RANGE_DAYS 日の土・日・月を近い順に並べる
+ */
+export function searchDatesFor(year: number, base: Date): Date[] {
+  const center = new Date(year, base.getMonth(), base.getDate());
+  // 同じ曜日に合わせる（-3〜+3日）
+  let diff = base.getDay() - center.getDay();
+  if (diff > 3) diff -= 7;
+  if (diff < -3) diff += 7;
+  const aligned = new Date(center);
+  aligned.setDate(aligned.getDate() + diff);
+  const out: { d: Date; dist: number }[] = [];
+  for (let off = -SEARCH_RANGE_DAYS; off <= SEARCH_RANGE_DAYS; off++) {
+    const d = new Date(aligned);
+    d.setDate(d.getDate() + off);
+    if ([0, 1, 6].includes(d.getDay())) out.push({ d, dist: Math.abs(off) });
+  }
+  return out.sort((a, b) => a.dist - b.dist || a.d.getTime() - b.d.getTime()).map((x) => x.d);
+}
+
 function mean(values: number[]): number | null {
   if (values.length === 0) return null;
   return Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100) / 100;
@@ -42,6 +74,10 @@ export interface HistoryYearResult {
   status: 'saved' | 'not_found' | 'mismatch' | 'error';
   raceId?: string;
   date?: string;
+  /** 実際の会場（代替開催なら今回と違う会場） */
+  venueName?: string;
+  /** 保存済みのため、今回は取得しなかった */
+  alreadySaved?: boolean;
   horseCount?: number;
   message: string;
 }
@@ -56,6 +92,8 @@ export interface HistoryCollectResult {
 export interface CornerHorse {
   year: string;
   date: string;
+  venueName: string;
+  trackCondition: string | null;
   raceId: string;
   finishPosition: number;
   horseNumber: number;
@@ -68,6 +106,7 @@ export interface CornerHorse {
 export interface FavoriteWin {
   year: string;
   date: string;
+  venueName: string;
   raceId: string;
   horseNumber: number;
   horseName: string | null;
@@ -78,10 +117,29 @@ export interface FavoriteWin {
   passing: string | null;
 }
 
+/** 馬場ごとの要約（1行分） */
+export interface ConditionSummary {
+  /** 良・稍重・重・不良。null = 全馬場 */
+  condition: string | null;
+  races: number;
+  /** 年（新しい順） */
+  years: string[];
+  favorite: { races: number; win: number; top3: number };
+  /** 3着以内の馬の4角の平均位置と、4角3番手以内だった割合 */
+  top3Corner: { horses: number; average: number | null; frontShare: number | null };
+  /** 3着以内の馬の平均人気 */
+  top3AvgPopularity: number | null;
+}
+
 export interface HistoryAnalysis {
-  race: { raceKey: string; name: string; venueName: string; surface: string; distance: number; condition: string | null };
+  /** condition = 詳細を表示している馬場（null = 全馬場）、raceCondition = 今回のレースの馬場（画面上部の選択） */
+  race: { raceKey: string; name: string; venueName: string; surface: string; distance: number; condition: string | null; raceCondition: string | null };
   seriesKey: string;
   raceCount: number;
+  /** 全馬場と馬場ごとの要約（全馬場が先頭） */
+  byCondition: ConditionSummary[];
+  /** 代替開催（今回と別の会場）の年 */
+  substituteYears: { year: string; venueName: string }[];
   favorite: {
     races: number;
     win: number;
@@ -139,11 +197,42 @@ export class HistoryService {
         .filter((n) => n.length > 0),
     ];
 
+    // 保存済みの年（取り直さない。ただし馬場が不明の年は取り直す）
+    const savedYears = new Map<number, { date: string; venueName: string; raceId: string; horses: number; condition: string | null }>();
+    for (const r of this.repo.listHistoryRuns(seriesKey)) {
+      const y = Number(r.date.slice(0, 4));
+      const cur = savedYears.get(y);
+      if (cur) cur.horses++;
+      else savedYears.set(y, { date: r.date, venueName: r.venueName, raceId: r.sourceRaceId, horses: 1, condition: r.trackCondition });
+    }
+
+    let unavailable = false;
     try {
       for (let k = 1; k <= years; k++) {
         const year = base.getFullYear() - k;
+        if (unavailable) {
+          results.push({ year, status: 'error', message: `${LIST_UNAVAILABLE}（前の年で止めました）。時間をおいて押し直してください` });
+          continue;
+        }
+        const saved = savedYears.get(year);
+        // 馬場が不明のまま保存された年（以前の読み取りの不具合）は、取り直して馬場を補う
+        if (saved && saved.condition !== null) {
+          results.push({
+            year,
+            status: 'saved',
+            raceId: saved.raceId,
+            date: saved.date,
+            venueName: saved.venueName,
+            horseCount: saved.horses,
+            alreadySaved: true,
+            message: `保存済み（${saved.date} ${saved.venueName}・${saved.horses}頭・馬場: ${saved.condition ?? '不明'}）`,
+          });
+          continue;
+        }
         try {
-          results.push(await this.collectYear(year, base, race, names, seriesKey));
+          const r = await this.collectYear(year, base, race, names, seriesKey);
+          if (r.status === 'error' && r.message.startsWith(LIST_UNAVAILABLE)) unavailable = true;
+          results.push(r);
         } catch (err: any) {
           results.push({ year, status: 'error', message: err?.message ?? String(err) });
         }
@@ -167,51 +256,71 @@ export class HistoryService {
     names: string[],
     seriesKey: string,
   ): Promise<HistoryYearResult> {
-    const center = new Date(year, base.getMonth(), base.getDate());
-
-    // 前後3日の同会場レースを集める
-    const candidates: CalendarRace[] = [];
-    for (let off = -3; off <= 3; off++) {
-      const d = new Date(center);
-      d.setDate(d.getDate() + off);
-      const dayRaces = await this.calendar.fetchRacesOnDate(d);
-      candidates.push(...dayRaces.filter((c) => c.trackName === race.venueName));
-    }
-
     // 開催一覧の競走名は省略表記（例: 「アイルランド」）のため、名前では絞らず
     // 一覧の文字に含まれる芝ダ・距離（例: 「芝1800m」）で候補を絞る
     const surfaceChar: Record<string, string> = { '芝': '芝', 'ダート': 'ダ', '障害': '障' };
     const courseToken = `${surfaceChar[race.surface] ?? race.surface}${race.distance}m`;
-    const sameCourse = candidates.filter((c) => c.raceName.normalize('NFKC').includes(courseToken));
-    if (sameCourse.length === 0) {
-      return { year, status: 'not_found', message: `前後3日の${race.venueName}に${courseToken}のレースがありません` };
-    }
-
-    // 一覧の省略名が正式名の先頭と一致するものから確認する（アクセスを減らすため）
+    // 一覧の省略名が正式名の先頭と一致するか（アクセスを減らすため、先に確認する）
     const shortNameOf = (text: string) =>
       normalizeRaceName(text.normalize('NFKC').replace(/^\s*\d+R\s*/, '').split(/\s+/)[0] ?? '');
     const likely = (c: CalendarRace) => {
       const s = shortNameOf(c.raceName);
       return s.length >= 2 && names.some((n) => n.startsWith(s));
     };
-    const ordered = [...sameCourse.filter(likely), ...sameCourse.filter((c) => !likely(c))].slice(0, 8);
 
-    // 結果ページのタイトルの競走名が正式名と一致するものを採用する
+    // 同じ曜日に合わせた日から近い順に、見つかるまで1日ずつ探す
     let hit: CalendarRace | null = null;
     let page: Awaited<ReturnType<NetkeibaSource['fetchRaceResult']>> | null = null;
-    for (const c of ordered) {
-      const p = await this.source.fetchRaceResult({ source: 'netkeiba', id: c.raceId });
-      if (names.includes(normalizeRaceName(p.raceName))) {
-        hit = c;
-        page = p;
-        break;
+    const checkedDays: string[] = [];
+    let sameCourseSeen = 0;
+    let weekendDays = 0;
+    let emptyWeekendDays = 0;
+    for (const d of searchDatesFor(year, base)) {
+      checkedDays.push(formatYmd(d).slice(5));
+      let dayRaces = await this.calendar.fetchRacesOnDate(d);
+      const weekend = d.getDay() === 0 || d.getDay() === 6;
+      if (weekend) {
+        weekendDays++;
+        // 土日なのに空なら、一時的な空の応答の可能性があるため少し待って読み直す
+        if (dayRaces.length === 0) {
+          await new Promise((r) => setTimeout(r, EMPTY_RETRY_WAIT_MS));
+          dayRaces = await this.calendar.fetchRacesOnDate(d);
+          if (dayRaces.length === 0) emptyWeekendDays++;
+        }
+        // 最初の土日が2日続けて空なら、一覧が取得できない状態とみなして止める
+        if (emptyWeekendDays >= 2 && emptyWeekendDays === weekendDays) {
+          return {
+            year,
+            status: 'error',
+            message: `${LIST_UNAVAILABLE}（土日の一覧が空で返りました。netkeiba 側の一時的な不調の可能性）。時間をおいて押し直してください`,
+          };
+        }
       }
+      const sameCourse = dayRaces.filter((c) => c.raceName.normalize('NFKC').includes(courseToken));
+      sameCourseSeen += sameCourse.length;
+      // 同じ会場は省略名が合わないものも確認する（名称の表記ゆれに備える）。別の会場（代替開催）は省略名が合うものだけ
+      const ordered = [
+        ...sameCourse.filter((c) => c.trackName === race.venueName && likely(c)),
+        ...sameCourse.filter((c) => c.trackName !== race.venueName && likely(c)),
+        ...sameCourse.filter((c) => c.trackName === race.venueName && !likely(c)),
+      ].slice(0, 4);
+      for (const c of ordered) {
+        const p = await this.source.fetchRaceResult({ source: 'netkeiba', id: c.raceId });
+        if (names.includes(normalizeRaceName(p.raceName))) {
+          hit = c;
+          page = p;
+          break;
+        }
+      }
+      if (hit) break;
     }
     if (!hit || !page) {
       return {
         year,
         status: 'not_found',
-        message: `${courseToken}の候補${ordered.length}件に「${race.name}」がありません（名称変更の可能性）`,
+        message:
+          `${checkedDays.length}日分（${checkedDays[0]}〜の土日月）を探しましたが「${race.name}」（${courseToken}）がありません` +
+          (sameCourseSeen === 0 ? '' : '（名称変更の可能性）'),
       };
     }
 
@@ -234,7 +343,7 @@ export class HistoryService {
       horseNumber: r.horseNumber,
       seriesKey,
       date: found.date,
-      venueName: race.venueName,
+      venueName: found.trackName,
       raceName: result.raceName,
       surface: result.surface,
       distance: result.distance,
@@ -251,29 +360,63 @@ export class HistoryService {
     }));
 
     this.repo.saveHistoryRuns(runs);
+    const substitute = found.trackName !== race.venueName;
     return {
       year,
       status: 'saved',
       raceId: hit.raceId,
       date: hit.date,
+      venueName: found.trackName,
       horseCount: runs.length,
-      message: `${runs.length}頭を保存（馬場: ${page.trackCondition ?? '不明'}）`,
+      message:
+        `${runs.length}頭を保存（${hit.date} ${found.trackName}${substitute ? '・代替開催' : ''}・馬場: ${page.trackCondition ?? '不明'}）`,
     };
   }
 
   /**
    * 保存済みの過去結果から分析する。
-   * @param conditionInput 馬場で絞り込む（良・稍重・重・不良）。省略時はレースの馬場、それも無ければ全馬場
+   * @param conditionInput 詳細を表示する馬場（良・稍重・重・不良）。省略・'all' なら全馬場
+   * @param raceCondition 今回のレースの馬場（表示で強調するため。省略時はレースに登録された馬場）
    */
-  analyze(raceKey: string, conditionInput?: string): HistoryAnalysis {
+  analyze(raceKey: string, conditionInput?: string, raceCondition?: string): HistoryAnalysis {
     const race = this.repo.getRace(raceKey);
     if (!race) throw new Error('対象レースが未登録です');
 
     const seriesKey = seriesKeyOf(race.name, race.venueName, race.surface, race.distance);
-    const condition = conditionInput || race.trackCondition || null;
+    const condition = conditionInput && conditionInput !== 'all' ? conditionInput : null;
 
     const all = this.repo.listHistoryRuns(seriesKey);
     const runs = condition ? all.filter((r) => r.trackCondition === condition) : all;
+
+    // 馬場ごとの要約（全馬場・良・稍重・重・不良）
+    const summarize = (cond: string | null): ConditionSummary => {
+      const rs = cond ? all.filter((r) => r.trackCondition === cond) : all;
+      const fav = rs.filter((r) => r.popularity === 1);
+      const t3 = rs.filter((r) => r.finishPosition !== null && r.finishPosition <= 3);
+      const cs = t3.map((r) => r.corner4).filter((n): n is number => n !== null);
+      return {
+        condition: cond,
+        races: new Set(rs.map((r) => r.sourceRaceId)).size,
+        years: [...new Set(rs.map((r) => r.date.slice(0, 4)))].sort((a, b) => b.localeCompare(a)),
+        favorite: {
+          races: fav.length,
+          win: fav.filter((r) => r.finishPosition === 1).length,
+          top3: fav.filter((r) => r.finishPosition !== null && r.finishPosition <= 3).length,
+        },
+        top3Corner: {
+          horses: t3.length,
+          average: mean(cs),
+          frontShare: cs.length > 0 ? Math.round((cs.filter((n) => n <= 3).length / cs.length) * 100) / 100 : null,
+        },
+        top3AvgPopularity: mean(t3.map((r) => r.popularity).filter((n): n is number => n !== null)),
+      };
+    };
+    const byCondition = [summarize(null), ...TRACK_CONDITIONS.map((c) => summarize(c))];
+    const substituteYears = [
+      ...new Map(all.filter((r) => r.venueName !== race.venueName).map((r) => [r.date.slice(0, 4), r.venueName])).entries(),
+    ]
+      .map(([year, venueName]) => ({ year, venueName }))
+      .sort((a, b) => b.year.localeCompare(a.year));
     const raceCount = new Set(runs.map((r) => r.sourceRaceId)).size;
 
     // 1. 1番人気の着順
@@ -308,6 +451,8 @@ export class HistoryService {
       .map((r) => ({
         year: r.date.slice(0, 4),
         date: r.date,
+        venueName: r.venueName,
+        trackCondition: r.trackCondition,
         raceId: r.sourceRaceId,
         finishPosition: r.finishPosition as number,
         horseNumber: r.horseNumber,
@@ -328,6 +473,7 @@ export class HistoryService {
         .map((r) => ({
           year: r.date.slice(0, 4),
           date: r.date,
+          venueName: r.venueName,
           raceId: r.sourceRaceId,
           horseNumber: r.horseNumber,
           horseName: r.horseName,
@@ -342,13 +488,18 @@ export class HistoryService {
 
     const notes: string[] = [
       condition
-        ? `馬場「${condition}」の結果のみで集計しています（対象: ${raceCount}回分）`
-        : `馬場が未指定のため、全馬場の結果で集計しています（対象: ${raceCount}回分）`,
+        ? `詳細は馬場「${condition}」の結果のみで集計しています（対象: ${raceCount}回分）`
+        : `詳細は全馬場の結果で集計しています（対象: ${raceCount}回分）`,
       '「4角」は最終コーナーの通過順位です（コーナーが3つ以下のコースでは最後のコーナー）',
       '「1番人気が勝ったレースで、その馬が過去に勝ってきたレース」は馬ごとの過去走データが必要なため未集計です（馬別の過去走取得は未実装）',
     ];
-    if (raceCount === 0) {
+    if (all.length === 0) {
       notes.push('保存済みの過去データがありません。先に「過去10年を取得」を実行してください');
+    } else if (raceCount > 0 && raceCount < 3) {
+      notes.push(`対象が${raceCount}回と少ないため、傾向は参考程度に見てください`);
+    }
+    if (substituteYears.length > 0) {
+      notes.push(`代替開催（別の会場）の年も含めています: ${substituteYears.map((x) => `${x.year}年 ${x.venueName}`).join('・')}`);
     }
 
     return {
@@ -359,9 +510,12 @@ export class HistoryService {
         surface: race.surface,
         distance: race.distance,
         condition,
+        raceCondition: raceCondition || race.trackCondition || null,
       },
       seriesKey,
       raceCount,
+      byCondition,
+      substituteYears,
       favorite,
       top3Corner: {
         horses: top3.length,

@@ -6,12 +6,32 @@ interface CollectYear {
   year: number;
   status: 'saved' | 'not_found' | 'mismatch' | 'error';
   date?: string;
+  venueName?: string;
+  alreadySaved?: boolean;
   message: string;
 }
+
+interface ConditionSummary {
+  condition: string | null;
+  races: number;
+  years: string[];
+  favorite: { races: number; win: number; top3: number };
+  top3Corner: { horses: number; average: number | null; frontShare: number | null };
+  top3AvgPopularity: number | null;
+}
+
+/** 詳細を表示する馬場（all = 全馬場） */
+type DetailCondition = 'all' | '良' | '稍重' | '重' | '不良';
+const DETAIL_OPTIONS: DetailCondition[] = ['all', '良', '稍重', '重', '不良'];
+const condLabel = (c: string | null) => (c === null || c === 'all' ? '全馬場' : c);
+/** これ未満の回数は「少数」として参考扱いにする */
+const FEW_RACES = 3;
 
 interface CornerHorse {
   year: string;
   date: string;
+  venueName: string;
+  trackCondition: string | null;
   finishPosition: number;
   horseNumber: number;
   horseName: string | null;
@@ -23,6 +43,7 @@ interface CornerHorse {
 interface FavoriteWin {
   year: string;
   date: string;
+  venueName: string;
   horseNumber: number;
   horseName: string | null;
   winOdds: number | null;
@@ -32,8 +53,10 @@ interface FavoriteWin {
 }
 
 interface Analysis {
-  race: { raceKey: string; name: string; venueName: string; surface: string; distance: number; condition: string | null };
+  race: { raceKey: string; name: string; venueName: string; surface: string; distance: number; condition: string | null; raceCondition: string | null };
   raceCount: number;
+  byCondition: ConditionSummary[];
+  substituteYears: { year: string; venueName: string }[];
   favorite: { races: number; win: number; second: number; third: number; outside: number; unknown: number };
   top3Corner: {
     horses: number;
@@ -70,20 +93,25 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
   const [busy, setBusy] = useState<'collect' | 'analyze' | null>(null);
   const [error, setError] = useState<string>('');
   const [years, setYears] = useState<CollectYear[]>([]);
+  const [seriesVenue, setSeriesVenue] = useState<string>('');
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [detail, setDetail] = useState<DetailCondition>('all');
 
-  const runAnalyze = async (): Promise<void> => {
-    const res = await fetch(`/api/history/analysis/${raceKey}?condition=${encodeURIComponent(condition)}`);
+  const runAnalyze = async (cond: DetailCondition = detail): Promise<void> => {
+    const res = await fetch(
+      `/api/history/analysis/${raceKey}?condition=${encodeURIComponent(cond)}&raceCondition=${encodeURIComponent(condition)}`,
+    );
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '分析に失敗しました');
     setAnalysis(data.analysis);
   };
 
-  const handleAnalyze = async () => {
+  const handleAnalyze = async (cond: DetailCondition = detail) => {
     setBusy('analyze');
     setError('');
+    setDetail(cond);
     try {
-      await runAnalyze();
+      await runAnalyze(cond);
     } catch (err: any) {
       setError(err.message || 'エラーが発生しました');
     } finally {
@@ -104,6 +132,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '取得に失敗しました');
       setYears(data.years ?? []);
+      setSeriesVenue(String(data.seriesKey ?? '').split('|')[1] ?? '');
       await runAnalyze();
     } catch (err: any) {
       setError(err.message || 'エラーが発生しました');
@@ -133,7 +162,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
               {busy === 'collect' ? '取得中（数分かかります）…' : '過去10年を取得（DB保存）'}
             </button>
             <button
-              onClick={handleAnalyze}
+              onClick={() => handleAnalyze()}
               disabled={busy !== null}
               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -143,7 +172,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
         </div>
 
         <p className="text-[11px] text-slate-400">
-          集計の馬場: <span className="font-bold text-slate-200">{condition}</span>（画面上部の馬場の選択に連動）
+          今回の馬場: <span className="font-bold text-slate-200">{condition}</span>（画面上部の馬場の選択）。過去の結果は馬場ごとに集計します
         </p>
 
         {error && (
@@ -162,6 +191,8 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
                 className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border bg-slate-950 ${STATUS_CLASS[y.status]}`}
               >
                 {y.year}年 {STATUS_LABEL[y.status]}
+                {y.status === 'saved' && y.venueName && seriesVenue && y.venueName !== seriesVenue && `（${y.venueName}）`}
+                {y.alreadySaved && <span className="text-slate-500 font-normal">・済</span>}
               </span>
             ))}
           </div>
@@ -171,8 +202,89 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
           <div className="flex flex-col gap-4 pt-2 border-t border-slate-800">
             <p className="text-xs text-slate-300 font-semibold">
               {analysis.race.name}（{analysis.race.venueName} {analysis.race.surface}{analysis.race.distance}m）
-              ・集計対象 {analysis.raceCount} 回
+              ・保存 {analysis.byCondition[0]?.races ?? 0} 回
+              {analysis.substituteYears.length > 0 && (
+                <span className="text-slate-500 font-normal">
+                  （うち代替開催 {analysis.substituteYears.map((x) => `${x.year}年${x.venueName}`).join('・')}）
+                </span>
+              )}
             </p>
+
+            {/* 0. 馬場ごとの傾向 */}
+            <div>
+              <h3 className="text-xs font-bold text-violet-300 mb-2">馬場ごとの傾向（行を押すと、下の詳細をその馬場で表示）</h3>
+              <div className="overflow-x-auto border border-slate-800 rounded-lg">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-900 text-slate-400">
+                    <tr>
+                      <th className="text-left px-2 py-1.5 font-semibold">馬場</th>
+                      <th className="text-left px-2 py-1.5 font-semibold">回数（年）</th>
+                      <th className="text-left px-2 py-1.5 font-semibold">1番人気 1着／3着内</th>
+                      <th className="text-left px-2 py-1.5 font-semibold">3着内の平均人気</th>
+                      <th className="text-left px-2 py-1.5 font-semibold">3着内の4角平均</th>
+                      <th className="text-left px-2 py-1.5 font-semibold">3着内で4角3番手以内</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analysis.byCondition.map((c) => {
+                      const key: DetailCondition = (c.condition ?? 'all') as DetailCondition;
+                      const isRace = c.condition !== null && c.condition === condition;
+                      const selected = key === detail;
+                      return (
+                        <tr
+                          key={key}
+                          onClick={() => c.races > 0 && handleAnalyze(key)}
+                          className={`border-t border-slate-800 ${c.races > 0 ? 'cursor-pointer hover:bg-slate-800/60' : 'text-slate-600'} ${
+                            selected ? 'bg-violet-500/10' : ''
+                          } ${c.races > 0 ? 'text-slate-200' : ''}`}
+                        >
+                          <td className="px-2 py-1 font-bold whitespace-nowrap">
+                            {condLabel(c.condition)}
+                            {isRace && <span className="ml-1 text-amber-300 font-semibold">今回</span>}
+                            {selected && <span className="ml-1 text-violet-300 font-semibold">表示中</span>}
+                          </td>
+                          <td className="px-2 py-1 whitespace-nowrap">
+                            {c.races > 0 ? (
+                              <>
+                                {c.races}回
+                                <span className="text-slate-500">（{c.years.map((y) => y.slice(2)).join('・')}）</span>
+                                {c.condition !== null && c.races < FEW_RACES && <span className="ml-1 text-amber-400/80">少数</span>}
+                              </>
+                            ) : (
+                              'なし'
+                            )}
+                          </td>
+                          <td className="px-2 py-1 whitespace-nowrap">
+                            {c.favorite.races > 0 ? `${c.favorite.win}／${c.favorite.top3}（${c.favorite.races}回中）` : '-'}
+                          </td>
+                          <td className="px-2 py-1">{c.top3AvgPopularity !== null ? `${c.top3AvgPopularity}番人気` : '-'}</td>
+                          <td className="px-2 py-1">{c.top3Corner.average !== null ? `${c.top3Corner.average}番手` : '-'}</td>
+                          <td className="px-2 py-1">
+                            {c.top3Corner.frontShare !== null ? `${Math.round(c.top3Corner.frontShare * 100)}%` : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 mt-2 text-[11px]">
+                <span className="text-slate-400">詳細の馬場:</span>
+                {DETAIL_OPTIONS.map((o) => (
+                  <button
+                    key={o}
+                    onClick={() => handleAnalyze(o)}
+                    disabled={busy !== null}
+                    className={`px-2 py-0.5 rounded-md border font-semibold ${
+                      o === detail ? 'bg-violet-500/20 text-violet-200 border-violet-500/50' : 'border-slate-700 text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    {condLabel(o)}
+                  </button>
+                ))}
+                <span className="text-slate-500">（以下の1〜3は「{condLabel(detail)}」で {analysis.raceCount} 回分）</span>
+              </div>
+            </div>
 
             {/* 1. 1番人気の着順 */}
             <div>
@@ -228,6 +340,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
                   <thead className="sticky top-0 bg-slate-900 text-slate-400">
                     <tr>
                       <th className="text-left px-2 py-1.5 font-semibold">開催日</th>
+                      <th className="text-left px-2 py-1.5 font-semibold">馬場</th>
                       <th className="text-left px-2 py-1.5 font-semibold">着順</th>
                       <th className="text-left px-2 py-1.5 font-semibold">馬番・馬名</th>
                       <th className="text-left px-2 py-1.5 font-semibold">4角</th>
@@ -237,7 +350,11 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
                   <tbody>
                     {analysis.top3Corner.list.map((h) => (
                       <tr key={`${h.date}-${h.horseNumber}`} className="border-t border-slate-800 text-slate-200">
-                        <td className="px-2 py-1">{h.date}</td>
+                        <td className="px-2 py-1 whitespace-nowrap">
+                          {h.date}
+                          {h.venueName !== analysis.race.venueName && <span className="text-slate-500">（{h.venueName}）</span>}
+                        </td>
+                        <td className="px-2 py-1">{h.trackCondition ?? '-'}</td>
                         <td className="px-2 py-1">{h.finishPosition}着</td>
                         <td className="px-2 py-1">{h.horseNumber} {h.horseName ?? ''}</td>
                         <td className="px-2 py-1 font-bold text-emerald-300">
@@ -265,7 +382,8 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
                 <ul className="text-xs text-slate-200 flex flex-col gap-1">
                   {analysis.favoriteWins.list.map((w) => (
                     <li key={`${w.date}-${w.horseNumber}`} className="bg-slate-950 border border-slate-800 rounded-md px-2 py-1">
-                      {w.date} {w.horseName ?? ''}（{w.horseNumber}番）単勝 {w.winOdds ?? '-'} 倍 / {w.headcount ?? '-'}頭 / 4角 {w.corner4 !== null ? `${w.corner4}番手` : '-'}
+                      {w.date}
+                      {w.venueName !== analysis.race.venueName ? `（${w.venueName}）` : ''} {w.horseName ?? ''}（{w.horseNumber}番）単勝 {w.winOdds ?? '-'} 倍 / {w.headcount ?? '-'}頭 / 4角 {w.corner4 !== null ? `${w.corner4}番手` : '-'}
                     </li>
                   ))}
                 </ul>
