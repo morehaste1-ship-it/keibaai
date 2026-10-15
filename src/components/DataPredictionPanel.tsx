@@ -144,7 +144,14 @@ export const DataPredictionPanel: React.FC<Props> = ({ raceKey, condition, onMar
   const [weights, setWeights] = useState<Weights | null>(null);
   const [error, setError] = useState('');
   // マウスを乗せている項目（説明の表示用）
-  const [hovered, setHovered] = useState<ComponentKey | null>(null);
+  // 項目の説明のツールチップ（マウスの位置に重ねて表示。画面の配置は動かさない）
+  const [tip, setTip] = useState<{ k: ComponentKey; x: number; y: number } | null>(null);
+  const hovered = tip?.k ?? null;
+  const tipHandlers = (k: ComponentKey) => ({
+    onMouseEnter: (e: React.MouseEvent) => setTip({ k, x: e.clientX, y: e.clientY }),
+    onMouseMove: (e: React.MouseEvent) => setTip({ k, x: e.clientX, y: e.clientY }),
+    onMouseLeave: () => setTip(null),
+  });
   // 補正の強さ（スライダーの表示用）と、計算に使う値（動かし終わって少し待ってから反映）
   const [smoothing, setSmoothing] = useState<Smoothing>(loadSmoothing);
   const [appliedSmoothing, setAppliedSmoothing] = useState<Smoothing>(smoothing);
@@ -371,8 +378,7 @@ export const DataPredictionPanel: React.FC<Props> = ({ raceKey, condition, onMar
                       key={k}
                       className={`${COMPONENT_COLORS[k]} flex items-center justify-center text-[10px] font-bold text-slate-950 whitespace-nowrap overflow-hidden`}
                       style={{ width: `${share}%` }}
-                      onMouseEnter={() => setHovered(k)}
-                      onMouseLeave={() => setHovered(null)}
+                      {...tipHandlers(k)}
                     >
                       {share >= 8 ? `${COMPONENT_LABELS[k]} ${Math.round(share)}%` : ''}
                     </div>
@@ -381,34 +387,41 @@ export const DataPredictionPanel: React.FC<Props> = ({ raceKey, condition, onMar
               )}
             </div>
 
-            {/* 項目の説明（比率バー・スライダーにマウスを乗せると表示） */}
-            <div className="min-h-[3.5rem] rounded border border-slate-800 bg-slate-900/80 px-3 py-2 text-[11px] text-slate-300">
-              {hovered ? (
-                <>
-                  <p className="font-bold text-white flex items-center gap-1.5">
-                    <span className={`inline-block w-2.5 h-2.5 rounded-sm ${COMPONENT_COLORS[hovered]}`} />
-                    {COMPONENT_LABELS[hovered]}（設定 {weights[hovered]}%{wSum > 0 ? `・実際 ${Math.round((weights[hovered] / wSum) * 100)}%` : ''}）：
-                    <span className="font-normal text-slate-200">{COMPONENT_DESCRIPTIONS[hovered].summary}</span>
-                  </p>
-                  <p className="text-slate-400 mt-0.5">データ：{COMPONENT_DESCRIPTIONS[hovered].source}</p>
-                  <ul className="mt-1 list-disc pl-4 space-y-0.5">
-                    {COMPONENT_DESCRIPTIONS[hovered].lines.map((l) => (
-                      <li key={l}>{l}</li>
-                    ))}
-                    {hovered === 'aptitude' && (
-                      <li className="text-sky-300">今の補正の強さ：仮{appliedSmoothing.horseK}戦（下の「補正の強さ」で変更できます）</li>
-                    )}
-                    {(hovered === 'jockey' || hovered === 'matchup') && (
-                      <li className="text-violet-300">今の補正の強さ：仮{appliedSmoothing.jockeyK}戦（下の「補正の強さ」で変更できます）</li>
-                    )}
-                  </ul>
-                </>
-              ) : (
-                <p className="text-slate-500">
-                  比率バーやスライダーの項目名にマウスを乗せると、その項目の計算方法と元データが表示されます。合計点＝各項目の点数×比率の合計です。
+            <p className="text-[10px] text-slate-500">
+              比率バーやスライダーの項目名にマウスを乗せると、その項目の計算方法と元データがツールチップで表示されます。合計点＝各項目の点数×比率の合計です。
+            </p>
+
+            {/* 項目の説明のツールチップ（マウスの近くに重ねて表示。操作の邪魔にならないよう、マウスの操作は下に通す） */}
+            {tip && hovered && (
+              <div
+                role="tooltip"
+                className="fixed z-50 pointer-events-none w-[340px] max-w-[90vw] rounded-lg border border-slate-600 bg-slate-900/95 shadow-xl px-3 py-2 text-[11px] text-slate-300"
+                style={{
+                  left: Math.min(Math.max(tip.x, 180), window.innerWidth - 180),
+                  top: tip.y,
+                  // 上に十分な余白があればマウスの上に、無ければ下に出す
+                  transform: tip.y > 300 ? 'translate(-50%, calc(-100% - 14px))' : 'translate(-50%, 18px)',
+                }}
+              >
+                <p className="font-bold text-white flex items-center gap-1.5 flex-wrap">
+                  <span className={`inline-block w-2.5 h-2.5 rounded-sm ${COMPONENT_COLORS[hovered]}`} />
+                  {COMPONENT_LABELS[hovered]}（設定 {weights[hovered]}%{wSum > 0 ? `・実際 ${Math.round((weights[hovered] / wSum) * 100)}%` : ''}）
                 </p>
-              )}
-            </div>
+                <p className="text-slate-200 mt-0.5">{COMPONENT_DESCRIPTIONS[hovered].summary}</p>
+                <p className="text-slate-400 mt-0.5">データ：{COMPONENT_DESCRIPTIONS[hovered].source}</p>
+                <ul className="mt-1 list-disc pl-4 space-y-0.5">
+                  {COMPONENT_DESCRIPTIONS[hovered].lines.map((l) => (
+                    <li key={l}>{l}</li>
+                  ))}
+                  {hovered === 'aptitude' && (
+                    <li className="text-sky-300">今の補正の強さ：仮{appliedSmoothing.horseK}戦（下の「補正の強さ」で変更できます）</li>
+                  )}
+                  {(hovered === 'jockey' || hovered === 'matchup') && (
+                    <li className="text-violet-300">今の補正の強さ：仮{appliedSmoothing.jockeyK}戦（下の「補正の強さ」で変更できます）</li>
+                  )}
+                </ul>
+              </div>
+            )}
 
             {/* スライダー（設定値） */}
             <div className="flex flex-wrap items-end gap-4">
@@ -416,10 +429,9 @@ export const DataPredictionPanel: React.FC<Props> = ({ raceKey, condition, onMar
                 <label
                   key={k}
                   className="flex flex-col text-[11px] text-slate-300 min-w-[110px]"
-                  onMouseEnter={() => setHovered(k)}
-                  onMouseLeave={() => setHovered(null)}
                 >
-                  <span className="flex items-center gap-1">
+                  {/* 項目名に乗せたときだけ説明を出す（スライダーを動かすときは出さない） */}
+                  <span className="flex items-center gap-1 cursor-help" {...tipHandlers(k)}>
                     <span className={`inline-block w-2.5 h-2.5 rounded-sm ${COMPONENT_COLORS[k]}`} />
                     {COMPONENT_LABELS[k]} <span className="font-bold text-white">{weights[k]}%</span>
                     {wSum !== 100 && wSum > 0 && (
