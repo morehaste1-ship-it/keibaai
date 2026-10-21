@@ -7,6 +7,7 @@
  * - 結果の取り込み：確定した着順と3連単の払戻
  * - 答え合わせ：印の着順、3連単の的中・回収率（1点100円で買ったと仮定）
  */
+import { biasText, summarizeBias } from './position-service';
 import type { PredictionRecord, RaceOutcome, RaceRepository } from '../db/repository';
 import type { NetkeibaSource } from '../sources/netkeiba';
 import { DEFAULT_HORSE_K, DEFAULT_JOCKEY_K, DEFAULT_WEIGHTS, MAX_HORSE_K, MAX_JOCKEY_K, activeWeights, type ScoreService } from './score-service';
@@ -244,10 +245,32 @@ export class ReviewService {
     });
     // 検証用（過去レースの予想し直し）は数が多いため一覧には出さず、集計だけに使う
     const listed = rows.filter((r) => r.source !== 'backtest');
+    const shown = listed.slice(0, REVIEW_ROW_LIMIT);
+    // 一覧のレースの開催日ごとの馬場傾向（その日の同じ競馬場・芝ダの全結果から）
+    const biasCache = new Map<string, DayBias | null>();
+    for (const r of shown) {
+      const race = this.repo.getRace(r.raceKey);
+      if (!race || !race.surface || !r.hasOutcome) continue;
+      const key = `${race.date}|${race.venueName}|${race.surface}`;
+      if (!biasCache.has(key)) {
+        const next = new Date(`${race.date}T00:00:00Z`);
+        next.setUTCDate(next.getUTCDate() + 1);
+        const b = summarizeBias(this.repo.listCourseOutcomes(race.venueName, race.surface, race.date, next.toISOString().slice(0, 10)));
+        biasCache.set(
+          key,
+          b ? { date: race.date, venueName: race.venueName, surface: race.surface, races: b.races, label: b.label, text: biasText(b) } : null,
+        );
+      }
+      r.dayBias = biasCache.get(key)?.label ?? null;
+    }
+    const dayBiases = [...biasCache.values()]
+      .filter((b): b is DayBias => b !== null)
+      .sort((a, b) => b.date.localeCompare(a.date) || a.venueName.localeCompare(b.venueName) || a.surface.localeCompare(b.surface));
     return {
       scope,
       totalRows: listed.length,
-      rows: listed.slice(0, REVIEW_ROW_LIMIT),
+      rows: shown,
+      dayBiases,
       summary: {
         backtest: summarize(rows.filter((r) => r.source === 'backtest')),
         eve: summarize(rows.filter((r) => r.source === 'eve')),
@@ -277,6 +300,18 @@ export interface ReviewRow {
   bets: BetResult[] | null;
   /** 予想と結果のずれ（分析に必要な情報がそろったレースのみ） */
   deviation: Deviation | null;
+  /** その日の同じ競馬場・芝ダの馬場傾向（例：前残り・内枠有利）。結果が無ければ null */
+  dayBias?: string | null;
+}
+
+/** 開催日ごとの馬場傾向（その日の結果から。予想には使わず、分析用） */
+export interface DayBias {
+  date: string;
+  venueName: string;
+  surface: string;
+  races: number;
+  label: string;
+  text: string;
 }
 
 export interface BetResult {
@@ -365,6 +400,8 @@ export interface ReviewResult {
   totalRows: number;
   rows: ReviewRow[];
   summary: { backtest: Summary; eve: Summary; auto: Summary; manual: Summary };
+  /** 一覧のレースの開催日ごとの馬場傾向（新しい順） */
+  dayBiases: DayBias[];
 }
 
 /** 取消・除外（馬券は返還）か */

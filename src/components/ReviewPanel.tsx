@@ -52,6 +52,18 @@ interface ReviewRow {
   marks: { mark: string; horseNumber: number; horseName: string; popularity: number | null; finishText: string | null; finishPosition: number | null }[];
   plans: { kind: string; available: boolean; reason: string; ticketCount: number; cost: number; hit: boolean; payout: number; refund: number }[];
   bets?: BetResult[] | null;
+  /** その日の同じ競馬場・芝ダの馬場傾向（例：前残り・内枠有利） */
+  dayBias?: string | null;
+}
+
+/** 開催日ごとの馬場傾向（その日の結果から。予想には使わず、分析用） */
+interface DayBias {
+  date: string;
+  venueName: string;
+  surface: string;
+  races: number;
+  label: string;
+  text: string;
 }
 
 /** 券種と、印からの買い方（サーバーの BET_RULES と同じ） */
@@ -99,6 +111,8 @@ export const ReviewPanel: React.FC = () => {
   const [openDev, setOpenDev] = useState<string | null>(null);
   const [scope, setScope] = useState<Scope>(loadScope);
   const [totalRows, setTotalRows] = useState(0);
+  const [dayBiases, setDayBiases] = useState<DayBias[]>([]);
+  const [showBias, setShowBias] = useState(false);
 
   const load = useCallback(() => {
     setError('');
@@ -108,6 +122,7 @@ export const ReviewPanel: React.FC = () => {
         if (!res.ok) throw new Error(data.error || '答え合わせの読み込みに失敗しました');
         setRows(data.review.rows);
         setTotalRows(data.review.totalRows ?? data.review.rows.length);
+        setDayBiases(data.review.dayBiases ?? []);
         setSummary(data.review.summary);
       })
       .catch((e) => setError(e.message));
@@ -303,6 +318,45 @@ export const ReviewPanel: React.FC = () => {
           </p>
         )}
 
+        {dayBiases.length > 0 && (
+          <div className="text-[11px] text-slate-300">
+            <button onClick={() => setShowBias(!showBias)} className="flex items-center gap-0.5 font-bold text-amber-200 hover:underline">
+              {showBias ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              開催日ごとの馬場傾向（{dayBiases.length}件）
+            </button>
+            {showBias && (
+              <div className="mt-1 overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="text-slate-500 text-left">
+                      <th className="font-normal pr-2">開催日</th>
+                      <th className="font-normal pr-2">コース</th>
+                      <th className="font-normal pr-2">判定</th>
+                      <th className="font-normal">内訳（3着以内の馬。倍率は出走馬全体の割合との比）</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dayBiases.map((b) => (
+                      <tr key={`${b.date}-${b.venueName}-${b.surface}`} className="border-t border-slate-800 align-top">
+                        <td className="pr-2 whitespace-nowrap">{b.date.slice(5).replace('-', '/')}</td>
+                        <td className="pr-2 whitespace-nowrap">
+                          {b.venueName}
+                          {b.surface}
+                        </td>
+                        <td className="pr-2 whitespace-nowrap font-bold text-amber-200">{b.label}</td>
+                        <td className="text-slate-400">{b.text}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-1 text-[10px] text-slate-500">
+                  その日の同じ競馬場・芝ダートの全レースの結果（4角の位置・枠番）から計算した分析用のデータです。当日の予想には使いません。前日予想では、この直近2週の傾向を「馬場傾向」の項目として使います。
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {rows && rows.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-[11px] text-slate-300">
@@ -377,6 +431,7 @@ export const ReviewPanel: React.FC = () => {
                       {r.hasOutcome ? (
                         <>
                           {r.winningCombos.map((c) => c.join('-')).join('／')}
+                          {r.dayBias && <span className="block text-[10px] text-amber-200/80">当日の馬場：{r.dayBias}</span>}
                           {r.deviation && (
                             <button
                               onClick={() => setOpenDev(openDev === `${r.raceKey}-${r.source}` ? null : `${r.raceKey}-${r.source}`)}

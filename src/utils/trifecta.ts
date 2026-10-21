@@ -248,6 +248,10 @@ export function explainHorse(h: RankedItem, pace: PaceForecast | null): string[]
   if (c.frame) lines.push(`枠：${c.frame.hasData ? `${c.frame.detail}（枠${c.frame.score}点）` : 'データなし'}`);
   if (c.change) lines.push(`条件替わり：${c.change.hasData ? `${c.change.detail}（条件替わり${c.change.score}点）` : 'データなし'}`);
   if (c.layoff) lines.push(`休み明け：${c.layoff.hasData ? `${c.layoff.detail}（休み明け${c.layoff.score}点）` : 'データなし'}`);
+  // 位置どり・騎手の位置どり・馬場傾向（古いデータで項目が無い場合は表示しない）
+  if (c.position) lines.push(`位置どり：${c.position.hasData ? `${c.position.detail}（位置どり${c.position.score}点）` : 'データなし'}`);
+  if (c.jockeyPos) lines.push(`騎手の位置どり：${c.jockeyPos.hasData ? `${c.jockeyPos.detail}（${c.jockeyPos.score}点）` : 'データなし'}`);
+  if (c.trend) lines.push(`馬場傾向：${c.trend.hasData ? `${c.trend.detail}（馬場傾向${c.trend.score}点）` : 'データなし'}`);
   // 展開
   if (pace) {
     if (!h.mainStyle) {

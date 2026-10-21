@@ -3,7 +3,7 @@
  */
 import type { AptitudeMatrixView, PredictionMark } from '../types/keiba';
 
-export type ComponentKey = 'recent' | 'aptitude' | 'jockey' | 'matchup' | 'history' | 'state' | 'closing' | 'margin' | 'speed' | 'frame' | 'change' | 'layoff';
+export type ComponentKey = 'recent' | 'aptitude' | 'jockey' | 'matchup' | 'history' | 'state' | 'closing' | 'margin' | 'speed' | 'frame' | 'change' | 'layoff' | 'position' | 'jockeyPos' | 'trend';
 
 export const COMPONENT_LABELS: Record<ComponentKey, string> = {
   recent: '近走',
@@ -18,11 +18,14 @@ export const COMPONENT_LABELS: Record<ComponentKey, string> = {
   frame: '枠',
   change: '条件替わり',
   layoff: '休み明け',
+  position: '位置どり',
+  jockeyPos: '騎手の位置どり',
+  trend: '馬場傾向',
 };
 
-export const COMPONENT_KEYS: ComponentKey[] = ['recent', 'aptitude', 'jockey', 'matchup', 'history', 'state', 'closing', 'margin', 'speed', 'frame', 'change', 'layoff'];
+export const COMPONENT_KEYS: ComponentKey[] = ['recent', 'aptitude', 'jockey', 'matchup', 'history', 'state', 'closing', 'margin', 'speed', 'frame', 'change', 'layoff', 'position', 'jockeyPos', 'trend'];
 /** データ不足の判定に数えない項目（あとから追加し、データがそろうまで時間がかかる項目。既存の判定を変えないため） */
-const NOT_COUNTED_FOR_SHORTAGE: ComponentKey[] = ['closing', 'margin', 'speed', 'frame', 'change', 'layoff'];
+const NOT_COUNTED_FOR_SHORTAGE: ComponentKey[] = ['closing', 'margin', 'speed', 'frame', 'change', 'layoff', 'position', 'jockeyPos', 'trend'];
 
 export interface ScoreComponent {
   score: number;
@@ -277,6 +280,38 @@ export const COMPONENT_DESCRIPTIONS: Record<ComponentKey, ComponentDescription> 
       '初めての休み明けは、全体の傾向（休み明けはふだんより何割成績が落ちるか）で見積もる',
       '休み明けでなければ50点。出走歴なしなら中立の50点',
       '「状態」の項目にも休み明けの −10 があります（配分の見直しで、どちらが効くかを確かめます）',
+      '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
+    ],
+  },
+  position: {
+    summary: '位置どりの有利不利。その馬がふだん4角を回る位置（前・中・後）が、今回のコース・馬場で3着以内に来やすい位置かです。',
+    source: 'DBにたまった全馬の過去走の通過順（同じ競馬場・芝ダート・距離、過去5年、レース日より前の走だけ）',
+    lines: [
+      '馬のふだんの位置：直近10走の4角の位置の平均（先頭0%〜最後方100%）。2走未満なら中立の50点',
+      'コースの集計：4角の位置を前・中・後に分け、それぞれの3着以内率を計算。今回と同じ馬場で300走以上あれば、その馬場だけで集計',
+      '点数：その位置の3着以内率がコース全体と同じで50点、1割高いと+10点',
+      'コースの過去走が150走未満なら中立の50点',
+      '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
+    ],
+  },
+  jockeyPos: {
+    summary: '騎手の位置どりの癖。今回の騎手が乗ると、馬の位置が前（または後ろ）に動きやすく、それがこのコースで有利に働くかです。',
+    source: 'DBにたまった全馬の過去走（騎手ごとに「その騎手が乗った走の4角の位置 − 同じ馬の前走の4角の位置」の平均）',
+    lines: [
+      '騎手の癖：前に行かせる騎手はマイナス、控える騎手はプラス。騎乗数が少ない騎手は0に寄せる（仮の50騎乗）',
+      'この馬のふだんの位置に騎手の癖を足した位置で、コースの3着以内率がどれだけ変わるかを点数にする',
+      '騎手の騎乗が20回未満、またはコース・馬の位置のデータが無ければ中立の50点',
+      '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
+    ],
+  },
+  trend: {
+    summary: '馬場傾向。直近2週の同じ競馬場・芝ダートで、前に行った馬・後ろから来た馬、内枠・外枠のどれが3着以内に来ていたかです。',
+    source: '答え合わせで取り込んだレース結果（4角の位置・枠番）。当日の結果は使わず、前日までの結果だけ',
+    lines: [
+      '3着以内の馬の割合 ÷ 出走馬全体の割合（倍率）を、前・中・後と内・中・外枠で計算（1.25倍以上で「前残り」「内枠有利」などと判定）',
+      'この馬のふだんの位置と今回の枠に当てはめ、倍率が1.0より大きいほど加点',
+      '直近2週の結果が8レース未満なら中立の50点',
+      '答え合わせの画面では、開催日ごとの当日の馬場傾向も確認できます',
       '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
     ],
   },

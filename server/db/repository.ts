@@ -555,6 +555,58 @@ export class RaceRepository {
     return { n: r.n, top3: r.top3 ?? 0, layoffN: r.layoffN ?? 0, layoffTop3: r.layoffTop3 ?? 0 };
   }
 
+  /** 位置どりの有利不利：条件に合う過去走の通過順・頭数・着順・馬場（fromDate 以上・beforeDate より前） */
+  coursePositionRuns(
+    q: { venue: string; surface: string; distance: number },
+    fromDate: string,
+    beforeDate: string,
+  ): { passing: string; headcount: number; finish: number; condition: string | null }[] {
+    return this.db
+      .prepare(
+        `SELECT passing, headcount, finish_position AS finish, track_condition AS condition FROM horse_runs
+         WHERE venue_name = ? AND surface = ? AND distance = ? AND date >= ? AND date < ?
+           AND passing IS NOT NULL AND headcount > 0 AND finish_position IS NOT NULL`,
+      )
+      .all(q.venue, q.surface, q.distance, fromDate, beforeDate) as any[];
+  }
+
+  /** 騎手の位置どりの癖の計算用：通過順のある全過去走（馬ごと・日付順） */
+  listPositionRows(): { horseId: string; date: string; jockeyId: string | null; passing: string; headcount: number }[] {
+    return this.db
+      .prepare(
+        `SELECT horse_id AS horseId, date, jockey_id AS jockeyId, passing, headcount FROM horse_runs
+         WHERE passing IS NOT NULL AND headcount > 0 ORDER BY horse_id, date`,
+      )
+      .all() as any[];
+  }
+
+  /** 馬場傾向の計算用：同じ競馬場・芝ダの結果（fromDate 以上・beforeDate より前。4角の位置と枠番つき） */
+  listCourseOutcomes(
+    venue: string,
+    surface: string,
+    fromDate: string,
+    beforeDate: string,
+  ): { raceKey: string; date: string; headcount: number; horses: { finish: number | null; corner4: number | null; frame: number | null }[] }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT r.race_key, r.date, o.finishes_json, o.meta_json FROM races r JOIN race_outcomes o ON o.race_key = r.race_key
+         WHERE r.venue_name = ? AND r.surface = ? AND r.date >= ? AND r.date < ? ORDER BY r.date, r.race_key`,
+      )
+      .all(venue, surface, fromDate, beforeDate) as any[];
+    const frameStmt = this.db.prepare('SELECT horse_number, frame_number FROM entries WHERE race_key = ?');
+    return rows.map((r) => {
+      const frames = new Map((frameStmt.all(r.race_key) as any[]).map((e) => [e.horse_number, e.frame_number]));
+      const finishes = JSON.parse(r.finishes_json) as RaceOutcome['finishes'];
+      const meta = r.meta_json ? JSON.parse(r.meta_json) : null;
+      return {
+        raceKey: r.race_key,
+        date: r.date,
+        headcount: meta?.headcount ?? finishes.length,
+        horses: finishes.map((f) => ({ finish: f.finishPosition, corner4: f.corner4 ?? null, frame: frames.get(f.horseNumber) ?? null })),
+      };
+    });
+  }
+
   /** 馬の過去走（新しい順） */
   listHorseRuns(horseId: string): HorseRunRecord[] {
     const rows = this.db.prepare('SELECT * FROM horse_runs WHERE horse_id = ? ORDER BY date DESC').all(horseId) as any[];

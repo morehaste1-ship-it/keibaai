@@ -3,6 +3,8 @@
  *
  * 項目: 近走 / 適性（芝ダ・距離帯、会場、馬場）/ 騎手 / 相性（騎手×脚質、騎手×枠）/ 過去10年の傾向 / 状態 / 末脚 / 着差 / スピード
  *       / 枠（コースの枠の有利不利）/ 条件替わり（距離・芝ダの変化）/ 休み明け
+ *       / 位置どり（コース・馬場ごとの4角の位置の有利不利）/ 騎手の位置どり（騎手の癖で位置が有利な方へ動くか）
+ *       / 馬場傾向（直近2週の同じ競馬場・芝ダの結果の偏り。当日の結果は使わない）
  * 配分（重み）は画面側で掛けて合計する（スライダーで変えられるように）。
  * DB は読むだけで書き込まない。
  * 未来のデータが混ざらないよう、馬・騎手・過去10年の成績はすべて「レース日より前」のものだけを使う
@@ -14,6 +16,7 @@ import { cutoffDate, distanceBandOf, frameGroupOf } from './jockey-service';
 import { seriesKeyOf } from './history-service';
 import { PedigreeService } from './pedigree-service';
 import { buildAptitudeMatrix, type AptitudeMatrix } from './aptitude-matrix';
+import { TENDENCY_K, biasText, courseBias, groupOf, jockeyTendencies, summarizeBias, usualRatio } from './position-service';
 
 /** 着順の点数（近走） */
 export function finishPoints(finish: number | null): number {
@@ -67,6 +70,16 @@ const CHANGE_DISTANCE = 200;
 const LAYOFF_DAYS = 91;
 /** 条件替わり・休み明け：その馬のふだんの3着以内率との差 1.0（100ポイント）あたりの点数（10ポイント高いと+20点） */
 const DIFF_POINTS = 200;
+/** 位置どり：コースの3着以内率の全体比 1.0 差あたりの点数 */
+const POSITION_POINTS = 100;
+/** 騎手の位置どり：騎手の癖で動く位置での3着以内率の差（全体比）1.0 あたりの点数 */
+const JOCKEY_POS_POINTS = 200;
+/** 騎手の位置どり：癖を使うのに必要な騎乗数 */
+const JOCKEY_POS_MIN = 20;
+/** 馬場傾向：何日前までの結果を見るか・必要なレース数・偏り（倍率）1.0 差あたりの点数 */
+const TREND_DAYS = 14;
+const TREND_MIN_RACES = 8;
+const TREND_POINTS = 30;
 /** 休み明けの全体の傾向（月ごとに1回だけ計算して使い回す。キー = レース日の年月） */
 const layoffPriorCache = new Map<string, { factor: number; detail: string } | null>();
 /** 「過去10年」の点数をそのまま使うのに必要な過去のレース数（これ未満は中立寄りに補正） */
@@ -117,6 +130,9 @@ export interface ScoreItem {
     frame: ScoreComponent;
     change: ScoreComponent;
     layoff: ScoreComponent;
+    position: ScoreComponent;
+    jockeyPos: ScoreComponent;
+    trend: ScoreComponent;
   };
 }
 
@@ -148,6 +164,9 @@ export const DEFAULT_WEIGHTS: ScoreResult['defaultWeights'] = {
   frame: 0,
   change: 0,
   layoff: 0,
+  position: 0,
+  jockeyPos: 0,
+  trend: 0,
 };
 
 /** 着差（秒）→ 点数。勝ち（マイナス・0）は100点 */
@@ -309,6 +328,21 @@ export class ScoreService {
       }
       return layoffPriorCache.get(key)!;
     })();
+
+    // 位置どり：コース・馬場ごとの4角の位置の有利不利／騎手ごとの位置どりの癖
+    const cBias = courseBias(this.repo, race, condition);
+    const tendencies = jockeyTendencies(this.repo, race.date);
+    // 馬場傾向：直近2週の同じ競馬場・芝ダの結果（レース日より前だけ。当日の結果は使わない）
+    const trendFrom = (() => {
+      const d = new Date(`${race.date}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - TREND_DAYS);
+      return d.toISOString().slice(0, 10);
+    })();
+    const recentOutcomes = race.surface ? this.repo.listCourseOutcomes(race.venueName, race.surface, trendFrom, race.date) : [];
+    const recentBias = summarizeBias(recentOutcomes);
+    const recentDays = [...new Set(recentOutcomes.map((o) => o.date.slice(5).replace('-', '/')))];
+    const fmtRatio = (r: number) => `${Math.round(r * 100)}%`;
+    const biasCond = cBias ? `${race.venueName}${race.surface}${race.distance}m${cBias.condition ? `・${cBias.condition}` : '・全馬場'}` : '';
 
     const items = this.repo.getEntries(raceKey).map((e): ScoreItem => {
       const odds = e.horseNumber !== null ? oddsMap.get(e.horseNumber) : undefined;
@@ -614,6 +648,63 @@ export class ScoreService {
         }
       }
 
+      // 13. 位置どり（その馬のふだんの4角の位置が、このコース・馬場で有利な位置か）
+      const usual = usualRatio(runs);
+      let position: ScoreComponent;
+      if (!cBias) {
+        position = NEUTRAL(`このコースの過去走が少ない（中立50点）`);
+      } else if (!usual) {
+        position = NEUTRAL('4角の位置が分かる過去走が2走未満（中立50点）');
+      } else {
+        const g = cBias.groups;
+        position = {
+          score: clampScore(50 + (cBias.rateAt(usual.ratio) / cBias.overall - 1) * POSITION_POINTS),
+          hasData: true,
+          detail:
+            `ふだんの4角は${groupOf(usual.ratio)}（直近${usual.n}走の平均 ${fmtRatio(usual.ratio)}位置）` +
+            `／${biasCond}の3着内率 前${pct(g.前.rate)}・中${pct(g.中.rate)}・後${pct(g.後.rate)}（${cBias.n}走）`,
+        };
+      }
+
+      // 14. 騎手の位置どり（騎手の癖で、この馬の位置が有利な方へ動くか）
+      let jockeyPos: ScoreComponent;
+      const tend = e.jockeyId ? tendencies.get(e.jockeyId) : undefined;
+      if (!cBias || !usual) {
+        jockeyPos = NEUTRAL('コースの位置どりか、この馬の位置のデータが不足（中立50点）');
+      } else if (!tend || tend.n < JOCKEY_POS_MIN) {
+        jockeyPos = NEUTRAL(`騎手の位置どりのデータが少ない（${tend?.n ?? 0}騎乗。中立50点）`);
+      } else {
+        const mean = tend.sum / tend.n;
+        const shift = mean * (tend.n / (tend.n + TENDENCY_K));
+        const expected = Math.max(0, Math.min(1, usual.ratio + shift));
+        jockeyPos = {
+          score: clampScore(50 + ((cBias.rateAt(expected) - cBias.rateAt(usual.ratio)) / cBias.overall) * JOCKEY_POS_POINTS),
+          hasData: true,
+          detail:
+            `騎手は馬の前走より平均${Math.abs(mean * 100).toFixed(1)}%${mean <= 0 ? '前' : '後ろ'}で4角を回る（${tend.n}騎乗）` +
+            `→ この馬は${fmtRatio(usual.ratio)}→${fmtRatio(expected)}位置の見込み`,
+        };
+      }
+
+      // 15. 馬場傾向（直近2週の同じ競馬場・芝ダで、この馬の位置・枠が有利だったか。当日の結果は使わない）
+      let trend: ScoreComponent;
+      const fgTrend = frameGroupOf(e.frameNumber);
+      if (!recentBias || recentBias.races < TREND_MIN_RACES) {
+        trend = NEUTRAL(`直近2週の${race.venueName}${race.surface}の結果が${recentBias?.races ?? 0}Rと少ない（中立50点）`);
+      } else if (!usual && !fgTrend) {
+        trend = NEUTRAL('この馬の位置・枠が不明（中立50点）');
+      } else {
+        const posPart = usual ? recentBias.posLift[groupOf(usual.ratio)] - 1 : 0;
+        const framePart = fgTrend ? (recentBias.frameLift[fgTrend] ?? 1) - 1 : 0;
+        trend = {
+          score: clampScore(50 + (posPart + framePart) * TREND_POINTS * 2),
+          hasData: true,
+          detail:
+            `直近（${recentDays.join('・')}）${race.venueName}${race.surface}：${biasText(recentBias)}` +
+            `／この馬は${usual ? groupOf(usual.ratio) : '位置不明'}・${fgTrend ?? '枠不明'}`,
+        };
+      }
+
       const pedRow = e.netkeibaHorseId ? this.repo.getPedigree(e.netkeibaHorseId) : null;
       // 状況別の適性（血統の推定は今回と同じ芝ダの産駒成績から）
       const pedLookup =
@@ -659,7 +750,7 @@ export class ScoreService {
             })()
           : null,
         aptitudeMatrix,
-        components: { recent, aptitude, jockey, matchup, history, state, closing, margin, speed, frame, change, layoff },
+        components: { recent, aptitude, jockey, matchup, history, state, closing, margin, speed, frame, change, layoff, position, jockeyPos, trend },
       };
     });
 
