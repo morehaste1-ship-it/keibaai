@@ -81,7 +81,12 @@ function total(scores: Record<string, number | null>, w: Weights, wSum: number):
   return Math.round((s / wSum) * 10) / 10;
 }
 
-export function evaluateWeights(samples: TuneSample[], w: Weights): TuneMetrics {
+/**
+ * 丸めない成績。配分を探すときの比較に使う。
+ * 表示用の evaluateWeights は 0.1% 単位に丸めるため、1ポイント動かした差が丸めで消えて
+ * 「改善なし」と判定され、探索がすぐ止まってしまう。探索では丸める前の値で比べる
+ */
+export function metricsRaw(samples: TuneSample[], w: Weights): TuneMetrics {
   const wSum = COMPONENT_KEYS.reduce((s, k) => s + Math.max(0, w[k] ?? 0), 0);
   let hit = 0;
   let top3Total = 0;
@@ -96,18 +101,25 @@ export function evaluateWeights(samples: TuneSample[], w: Weights): TuneMetrics 
     hit += top.filter((x) => x.h.finish <= 3).length;
     if (ranked[0] && ranked[0].h.finish <= 3) firstHit++;
   }
-  const r1 = (v: number) => Math.round(v * 10) / 10;
   return {
-    top3InTop5: top3Total > 0 ? r1((hit / top3Total) * 100) : 0,
-    firstTop3: samples.length > 0 ? r1((firstHit / samples.length) * 100) : 0,
+    top3InTop5: top3Total > 0 ? (hit / top3Total) * 100 : 0,
+    firstTop3: samples.length > 0 ? (firstHit / samples.length) * 100 : 0,
     races: samples.length,
   };
+}
+
+/** 表示用の成績（0.1% 単位に丸める） */
+export function evaluateWeights(samples: TuneSample[], w: Weights): TuneMetrics {
+  const m = metricsRaw(samples, w);
+  const r1 = (v: number) => Math.round(v * 10) / 10;
+  return { top3InTop5: r1(m.top3InTop5), firstTop3: r1(m.firstTop3), races: m.races };
 }
 
 /** 今の配分から各項目 ±MAX_STEP の範囲で、1ポイントずつ付け替えて学習用の成績がよくなる配分を探す */
 export function searchWeights(train: TuneSample[], current: Weights): Weights {
   let best = { ...current };
-  let bestScore = evaluateWeights(train, best).top3InTop5;
+  // 丸めない成績で比べる（丸めると1ポイントぶんの改善が消え、探索が1歩で止まる）
+  let bestScore = metricsRaw(train, best).top3InTop5;
   for (let iter = 0; iter < MAX_STEP * COMPONENT_KEYS.length; iter++) {
     let improved: { w: Weights; score: number } | null = null;
     for (const from of COMPONENT_KEYS) {
@@ -115,7 +127,7 @@ export function searchWeights(train: TuneSample[], current: Weights): Weights {
       for (const to of COMPONENT_KEYS) {
         if (to === from || (best[to] ?? 0) + 1 > (current[to] ?? 0) + MAX_STEP) continue;
         const w = { ...best, [from]: best[from] - 1, [to]: (best[to] ?? 0) + 1 };
-        const score = evaluateWeights(train, w).top3InTop5;
+        const score = metricsRaw(train, w).top3InTop5;
         if (score > (improved?.score ?? bestScore)) improved = { w, score };
       }
     }
@@ -143,6 +155,8 @@ export function tuneWeights(samples: TuneSample[], current: Weights): TuneResult
   }
   const tn = evaluateWeights(train, candidate);
   const hn = evaluateWeights(hold, candidate);
+  // 丸める前の差（採用の基準にどれだけ近いかを見るため）
+  const rawGain = metricsRaw(hold, candidate).top3InTop5 - metricsRaw(hold, current).top3InTop5;
   const result = { ...base, candidate, train: { current: tc, candidate: tn }, holdout: { current: hc, candidate: hn } };
   if (hn.top3InTop5 >= hc.top3InTop5 + MIN_GAIN) {
     return {
@@ -153,7 +167,9 @@ export function tuneWeights(samples: TuneSample[], current: Weights): TuneResult
   }
   return {
     ...result,
-    message: `学習用では上がったが、直近${hold.length}レースでは ${hc.top3InTop5}% → ${hn.top3InTop5}% で、${MIN_GAIN}ポイント以上上回らなかったため変えません`,
+    message:
+      `学習用では上がったが、直近${hold.length}レースでは ${hc.top3InTop5}% → ${hn.top3InTop5}%` +
+      `（丸める前の差 ${rawGain >= 0 ? '+' : ''}${rawGain.toFixed(2)}ポイント）で、${MIN_GAIN}ポイント以上上回らなかったため変えません`,
   };
 }
 
