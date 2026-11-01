@@ -291,7 +291,12 @@ export interface HorsePage {
 export interface JockeyPage {
   jockeyName: string | null;
   lastPage: number | null;
+  /** JRAのレースの行（海外・地方のレースは含まない） */
   rows: JockeyPageRow[];
+  /** 成績表にあった行の数（海外・地方のレースも含む）。0なら成績表が無い・読めない */
+  tableRows: number;
+  /** 成績表の最も古い日付（海外・地方のレースも含む。YYYY-MM-DD） */
+  oldestDate: string | null;
 }
 
 export class NetkeibaSource implements RaceDataSource {
@@ -549,7 +554,7 @@ export class NetkeibaSource implements RaceDataSource {
       (t) => t.includes('日付') && t.includes('着') && t.includes('通過'),
     );
     if (!table) {
-      return { jockeyName, lastPage, rows: [] };
+      return { jockeyName, lastPage, rows: [], tableRows: 0, oldestDate: null };
     }
 
     const cellsOf = (rowHtml: string): string[] =>
@@ -560,7 +565,7 @@ export class NetkeibaSource implements RaceDataSource {
     const rowHtmls = table.match(/<tr[\s\S]*?<\/tr>/gi) || [];
     const headerIdx = rowHtmls.findIndex((r) => cellsOf(r).some((c) => c.replace(/\s/g, '') === '日付'));
     if (headerIdx < 0) {
-      return { jockeyName, lastPage, rows: [] };
+      return { jockeyName, lastPage, rows: [], tableRows: 0, oldestDate: null };
     }
     const headers = cellsOf(rowHtmls[headerIdx]).map((h) => h.replace(/\s/g, ''));
     const col = (name: string) => headers.findIndex((h) => h === name);
@@ -586,9 +591,18 @@ export class NetkeibaSource implements RaceDataSource {
     const surfaceMap: Record<string, string> = { '芝': '芝', 'ダ': 'ダート', '障': '障害' };
 
     const rows: JockeyPageRow[] = [];
+    // 海外・地方のレースも含めた行数と最も古い日付（短期免許の騎手は、海外のレースだけのページが続くことがあるため）
+    let tableRows = 0;
+    let oldestDate: string | null = null;
     for (const rowHtml of rowHtmls.slice(headerIdx + 1)) {
       const cells = cellsOf(rowHtml);
       const dateMatch = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(cells[iDate] ?? '');
+      if (dateMatch) {
+        tableRows++;
+        const d = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+        if (oldestDate === null || d < oldestDate) oldestDate = d;
+      }
+      // JRA・地方のレースIDは12桁の数字。海外は英字を含む（例 2026C8010103）ため、ここで除かれる
       const raceId = rowHtml.match(/\/race\/(\d{12})\//)?.[1] ?? null;
       if (!dateMatch || !raceId) continue;
 
@@ -621,7 +635,7 @@ export class NetkeibaSource implements RaceDataSource {
       });
     }
 
-    return { jockeyName, lastPage, rows };
+    return { jockeyName, lastPage, rows, tableRows, oldestDate };
   }
 
   /**

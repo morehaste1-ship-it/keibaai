@@ -224,7 +224,8 @@ export class JockeyService {
       this.status.pagesFetched++;
       const p = await this.source.fetchJockeyPage(jockeyId, page);
       if (page === 1) {
-        if (p.rows.length === 0) throw new Error('成績表が読み取れませんでした（ページ構造の変更の可能性）');
+        // 成績表そのものが無いときだけ失敗にする（短期免許の騎手は、1ページ目が海外のレースだけのことがある）
+        if (p.tableRows === 0) throw new Error('成績表が読み取れませんでした（ページ構造の変更の可能性）');
         this.repo.upsertJockey(jockeyId, p.jockeyName);
       }
       this.saveRows(jockeyId, p, cutoff);
@@ -239,8 +240,9 @@ export class JockeyService {
       for (let page = 1; ; page++) {
         const p = await fetchPage(page);
         if (!p) break;
-        const reached = p.rows.some((r) => r.date <= (state.newestDate as string));
-        if (reached || p.rows.length === 0 || (p.lastPage !== null && page >= p.lastPage)) {
+        // 海外のレースも含めた日付で、保存済みの最新日付に達したかを見る
+        const reached = p.oldestDate !== null && p.oldestDate <= (state.newestDate as string);
+        if (reached || p.tableRows === 0 || (p.lastPage !== null && page >= p.lastPage)) {
           updateComplete = true;
           break;
         }
@@ -254,8 +256,9 @@ export class JockeyService {
     while (!done) {
       const p = await fetchPage(page);
       if (!p) break;
-      const oldest = p.rows.reduce<string | null>((min, r) => (min === null || r.date < min ? r.date : min), null);
-      if (p.rows.length === 0 || (oldest !== null && oldest < cutoff) || (p.lastPage !== null && page >= p.lastPage)) {
+      // 海外のレースだけのページ（JRAが0件）でも、成績表があれば次のページへ進む
+      const oldest = p.oldestDate;
+      if (p.tableRows === 0 || (oldest !== null && oldest < cutoff) || (p.lastPage !== null && page >= p.lastPage)) {
         done = true;
       } else {
         page++;
