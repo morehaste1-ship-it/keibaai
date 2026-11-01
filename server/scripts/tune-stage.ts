@@ -28,6 +28,10 @@ export function logWeightReview(repo: RaceRepository, opts: { dryRun?: boolean }
     );
   }
   if (result.candidate) console.log(`[Tune] 候補の配分: ${fmt(result.candidate)}`);
+  if (result.holdoutWinLoss) {
+    const wl = result.holdoutWinLoss;
+    console.log(`[Tune] 確認用の1レースずつの勝敗: ${wl.win}勝${wl.lose}敗（偶然からのずれ ${wl.z.toFixed(2)}／1.65以上で採用）`);
+  }
   console.log(`[Tune] ${result.message}${opts.dryRun && result.adopted ? '（--dry のため採用していません）' : ''}`);
   if (version) console.log(`[Tune] 採用しました（版 ${version.id}）。次に記録する予想から使います`);
 

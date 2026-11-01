@@ -6,7 +6,7 @@
  *
  * - 物差し：3着以内に入った馬が、合計点の上位5頭に入った割合（%）
  * - レースを日付順に並べ、古い7割で配分を探し（学習用）、新しい3割で確かめる（確認用）
- * - 確認用でも今の配分を MIN_GAIN ポイント以上上回ったときだけ採用する（たまたま当たった配分を避けるため）
+ * - 確認用でも成績が上がり、かつ1レースずつの勝敗が偶然とは言えないほど勝ち越したときだけ採用する（たまたま当たった配分を避けるため）
  * - 対象が MIN_RACES レース未満なら変えない。1回の見直しで各項目は今の配分から ±MAX_STEP まで
  * - 1つのレースに記録が複数あるときは、当日 > 前日 > 検証用 > 手動 の順に1つだけ使う（点数は配分によらないため）
  */
@@ -17,9 +17,18 @@ import { DEFAULT_WEIGHTS, activeWeights } from './score-service';
 export { activeWeights };
 
 export const MIN_RACES = 50;
-export const MAX_STEP = 5;
-/** 確認用で今の配分を何ポイント上回れば採用するか */
-export const MIN_GAIN = 0.5;
+/** 1回の見直しで各項目を動かせる上限（ポイント） */
+export const MAX_STEP = 10;
+/**
+ * 採用の判定（確認用データ）。次の2つを両方満たしたときだけ採用する
+ *  1. 成績がプラスであること
+ *  2. 1レースずつ比べて、良くなったレースが悪くなったレースより、偶然とは言えないほど多いこと（符号検定・片側5%）
+ * 以前は「0.5ポイント以上」という固定値だったが、根拠がなく、
+ * 真の改善が0.3〜0.4ポイントのときに永久に採用されないため、統計的な判定に変えた
+ */
+export const SIGN_Z = 1.645;
+/** 勝敗で判定するのに最低限必要な、決着した（成績が変わった）レース数 */
+export const MIN_DECIDED = 30;
 /** 確認用に回す割合と最低レース数 */
 const HOLDOUT_SHARE = 0.3;
 const MIN_HOLDOUT = 20;
@@ -42,6 +51,14 @@ export interface TuneMetrics {
   races: number;
 }
 
+/** 1レースずつ比べた勝敗 */
+export interface WinLoss {
+  win: number;
+  lose: number;
+  /** 偶然からのずれ（標準化した値）。1.645 以上なら偶然とは言いにくい */
+  z: number;
+}
+
 export interface TuneResult {
   adopted: boolean;
   /** 採用しなかった理由、または採用の説明 */
@@ -50,6 +67,8 @@ export interface TuneResult {
   candidate: Weights | null;
   train: { current: TuneMetrics; candidate: TuneMetrics | null } | null;
   holdout: { current: TuneMetrics; candidate: TuneMetrics | null } | null;
+  /** 確認用データでの1レースずつの勝敗（候補が無いときは null） */
+  holdoutWinLoss: WinLoss | null;
   races: number;
 }
 
@@ -115,6 +134,31 @@ export function evaluateWeights(samples: TuneSample[], w: Weights): TuneMetrics 
   return { top3InTop5: r1(m.top3InTop5), firstTop3: r1(m.firstTop3), races: m.races };
 }
 
+/** 1レースで、3着以内の馬が合計点の上位5頭に何頭入ったか */
+function hitsOf(smp: TuneSample, w: Weights, wSum: number): number {
+  const ranked = smp.horses
+    .map((h) => ({ h, t: wSum > 0 ? total(h.scores, w, wSum) : 0 }))
+    .sort((a, b) => b.t - a.t || a.h.horseNumber - b.h.horseNumber);
+  return ranked.slice(0, TOP_N).filter((x) => x.h.finish <= 3).length;
+}
+
+/**
+ * 1レースずつ比べた勝敗。z は偶然からのずれ（勝敗が五分五分なら0付近、大きいほど偶然とは言いにくい）
+ */
+export function winLoss(samples: TuneSample[], base: Weights, next: Weights): WinLoss {
+  const bSum = COMPONENT_KEYS.reduce((s, k) => s + Math.max(0, base[k] ?? 0), 0);
+  const nSum = COMPONENT_KEYS.reduce((s, k) => s + Math.max(0, next[k] ?? 0), 0);
+  let win = 0;
+  let lose = 0;
+  for (const smp of samples) {
+    const d = hitsOf(smp, next, nSum) - hitsOf(smp, base, bSum);
+    if (d > 0) win++;
+    else if (d < 0) lose++;
+  }
+  const n = win + lose;
+  return { win, lose, z: n > 0 ? (win - n / 2) / Math.sqrt(n / 4) : 0 };
+}
+
 /** 今の配分から各項目 ±MAX_STEP の範囲で、1ポイントずつ付け替えて学習用の成績がよくなる配分を探す */
 export function searchWeights(train: TuneSample[], current: Weights): Weights {
   let best = { ...current };
@@ -139,7 +183,7 @@ export function searchWeights(train: TuneSample[], current: Weights): Weights {
 }
 
 export function tuneWeights(samples: TuneSample[], current: Weights): TuneResult {
-  const base: TuneResult = { adopted: false, message: '', current, candidate: null, train: null, holdout: null, races: samples.length };
+  const base: TuneResult = { adopted: false, message: '', current, candidate: null, train: null, holdout: null, holdoutWinLoss: null, races: samples.length };
   if (samples.length < MIN_RACES) {
     return { ...base, message: `結果がそろったレースが${samples.length}件のため見直しません（${MIN_RACES}件以上で見直します）` };
   }
@@ -157,19 +201,34 @@ export function tuneWeights(samples: TuneSample[], current: Weights): TuneResult
   const hn = evaluateWeights(hold, candidate);
   // 丸める前の差（採用の基準にどれだけ近いかを見るため）
   const rawGain = metricsRaw(hold, candidate).top3InTop5 - metricsRaw(hold, current).top3InTop5;
-  const result = { ...base, candidate, train: { current: tc, candidate: tn }, holdout: { current: hc, candidate: hn } };
-  if (hn.top3InTop5 >= hc.top3InTop5 + MIN_GAIN) {
+  const wl = winLoss(hold, current, candidate);
+  const result = { ...base, candidate, train: { current: tc, candidate: tn }, holdout: { current: hc, candidate: hn }, holdoutWinLoss: wl };
+  const gainText = `${rawGain >= 0 ? '+' : ''}${rawGain.toFixed(2)}ポイント`;
+  const wlText = `${wl.win}勝${wl.lose}敗`;
+  const decided = wl.win + wl.lose;
+  if (decided < MIN_DECIDED) {
     return {
       ...result,
-      adopted: true,
-      message: `直近${hold.length}レースで、3着以内の馬が上位5頭に入った割合が ${hc.top3InTop5}% → ${hn.top3InTop5}% に上がるため採用`,
+      message: `直近${hold.length}レースのうち、成績が変わったのが${decided}レース（${wlText}）だけで少ないため、確かめられません。${MIN_DECIDED}レース以上で判定します`,
+    };
+  }
+  if (rawGain <= 0) {
+    return { ...result, message: `学習用では上がったが、直近${hold.length}レースでは ${gainText}（${wlText}）と上がらないため変えません` };
+  }
+  if (wl.z < SIGN_Z) {
+    return {
+      ...result,
+      message:
+        `直近${hold.length}レースで ${gainText} 上がりますが、1レースずつ比べると ${wlText} で` +
+        `偶然の範囲を出ないため変えません（勝ち越しが偶然とは言いにくい水準に届いていません）`,
     };
   }
   return {
     ...result,
+    adopted: true,
     message:
-      `学習用では上がったが、直近${hold.length}レースでは ${hc.top3InTop5}% → ${hn.top3InTop5}%` +
-      `（丸める前の差 ${rawGain >= 0 ? '+' : ''}${rawGain.toFixed(2)}ポイント）で、${MIN_GAIN}ポイント以上上回らなかったため変えません`,
+      `直近${hold.length}レースで、3着以内の馬が上位5頭に入った割合が ${hc.top3InTop5}% → ${hn.top3InTop5}%（${gainText}）に上がり、` +
+      `1レースずつ比べても ${wlText} と偶然とは言えない差があるため採用`,
   };
 }
 
