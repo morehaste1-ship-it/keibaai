@@ -29,6 +29,40 @@ export function finishPoints(finish: number | null): number {
   return 10;
 }
 
+/**
+ * クラス補正：重賞・リステッド・オープンでの走りは、着順点に上乗せする。
+ * 2026-11-14、過去11,577レースで検証済み（確認用データで +0.3pt、勝敗 36勝9敗 z=4.02）。
+ * 検証スクリプト: server/scripts/check-class-recent.ts（倍率1.0 = この値。グレードは races テーブルから引いた方法で検証）
+ * グレードは過去走のレース名の末尾（例「毎日王冠(GII)」「BSN賞(L)」「ペルセウスS(OP)」）から読む。
+ * races テーブルから引く方法は、過去レースの取り込みが済んだ日しか分からないため（2023年以前の過去走が拾えなかった）
+ */
+export const GRADE_BONUS: Record<string, number> = { G1: 20, G2: 15, G3: 10, L: 5, OP: 5 };
+
+/** グレード表記（GI/G1 など）をそろえる。重賞・L・OP 以外は null */
+export function normalizeGrade(g: string | null | undefined): 'G1' | 'G2' | 'G3' | 'L' | 'OP' | null {
+  if (!g) return null;
+  const s = g.toUpperCase();
+  if (s === 'GI' || s === 'G1') return 'G1';
+  if (s === 'GII' || s === 'G2') return 'G2';
+  if (s === 'GIII' || s === 'G3') return 'G3';
+  if (s === 'L') return 'L';
+  if (s === 'OP') return 'OP';
+  return null;
+}
+
+/** 過去走のレース名の末尾にあるグレード表記を読む（例「天皇賞(秋)(GI)」→ G1）。無ければ null */
+export function gradeFromRaceName(name: string | null | undefined): 'G1' | 'G2' | 'G3' | 'L' | 'OP' | null {
+  const m = /\((GIII|GII|GI|G3|G2|G1|L|OP)\)\s*$/.exec((name ?? '').normalize('NFKC'));
+  return m ? normalizeGrade(m[1]) : null;
+}
+
+/** 近走1走分の点数（着順点＋クラス補正、100点で頭打ち） */
+export function recentRunPoints(finish: number | null, grade: string | null): number {
+  const base = finishPoints(finish);
+  const bonus = grade ? (GRADE_BONUS[grade] ?? 0) : 0;
+  return bonus > 0 ? Math.min(100, base + bonus) : base;
+}
+
 /** 少ない出走数の率を、基準の率に寄せて補正する */
 export function smoothRate(top3: number, n: number, prior: number, k: number): number {
   return (top3 + prior * k) / (n + k);
@@ -236,6 +270,11 @@ export class ScoreService {
     this.pedigree = new PedigreeService(null as any, repo);
   }
 
+  /** 過去走1走のグレード（レース名の末尾の表記から読む） */
+  private gradeOfRun(r: HorseRunRecord): 'G1' | 'G2' | 'G3' | 'L' | 'OP' | null {
+    return gradeFromRaceName(r.raceName);
+  }
+
   compute(
     raceKey: string,
     conditionInput?: string,
@@ -372,11 +411,13 @@ export class ScoreService {
         recent = NEUTRAL('JRAの出走歴なし（中立50点）');
       } else {
         const ws = RECENT_WEIGHTS.slice(0, last5.length);
-        const score = last5.reduce((s, r, i) => s + finishPoints(r.finishPosition) * ws[i], 0) / ws.reduce((a, b) => a + b, 0);
+        const graded = last5.map((r) => this.gradeOfRun(r));
+        const score = last5.reduce((s, r, i) => s + recentRunPoints(r.finishPosition, graded[i]) * ws[i], 0) / ws.reduce((a, b) => a + b, 0);
+        const bonusCount = graded.filter((g) => g !== null).length;
         recent = {
           score: Math.round(score),
           hasData: true,
-          detail: `近${last5.length}走: ${last5.map((r) => r.finishText || '-').join('-')}`,
+          detail: `近${last5.length}走: ${last5.map((r) => r.finishText || '-').join('-')}${bonusCount > 0 ? `（重賞等${bonusCount}走にクラス補正）` : ''}`,
         };
       }
 
