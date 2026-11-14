@@ -56,11 +56,38 @@ export function gradeFromRaceName(name: string | null | undefined): 'G1' | 'G2' 
   return m ? normalizeGrade(m[1]) : null;
 }
 
-/** 近走1走分の点数（着順点＋クラス補正、100点で頭打ち） */
-export function recentRunPoints(finish: number | null, grade: string | null): number {
+/**
+ * クラス補正の掛け方
+ *  - none     : 補正なし（着順点だけ）
+ *  - capRun   : 1走ごとに100点で頭打ち（G1の1着も未勝利戦の1着も100点。差が付くのは2着以下）
+ *  - capTotal : 1走は100点を超えてよく（G1の1着=120点）、近走の合計だけ100点で頭打ち
+ */
+export type RecentClassMode = 'none' | 'capRun' | 'capTotal';
+/** 予想で使う掛け方（check-class.ts で3つを比べてから決める） */
+export const RECENT_CLASS_MODE: RecentClassMode = 'capRun';
+
+/** 近走1走分の点数（着順点＋クラス補正） */
+export function recentRunPoints(finish: number | null, grade: string | null, mode: RecentClassMode = RECENT_CLASS_MODE): number {
   const base = finishPoints(finish);
+  if (mode === 'none') return base;
   const bonus = grade ? (GRADE_BONUS[grade] ?? 0) : 0;
-  return bonus > 0 ? Math.min(100, base + bonus) : base;
+  if (bonus <= 0) return base;
+  return mode === 'capRun' ? Math.min(100, base + bonus) : base + bonus;
+}
+
+/**
+ * 近走の点数（直近5走の加重平均。新しい走ほど重い 5:4:3:2:1）。出走歴が無ければ null
+ * runs は新しい順・レース日より前の走だけを渡す
+ */
+export function recentScoreOf(
+  runs: { finishPosition: number | null; raceName: string | null }[],
+  mode: RecentClassMode = RECENT_CLASS_MODE,
+): number | null {
+  const last5 = runs.slice(0, 5);
+  if (last5.length === 0) return null;
+  const ws = [5, 4, 3, 2, 1].slice(0, last5.length);
+  const score = last5.reduce((sum, r, k) => sum + recentRunPoints(r.finishPosition, gradeFromRaceName(r.raceName), mode) * ws[k], 0) / ws.reduce((a, b) => a + b, 0);
+  return Math.min(100, Math.round(score));
 }
 
 /** 少ない出走数の率を、基準の率に寄せて補正する */
@@ -410,12 +437,9 @@ export class ScoreService {
       if (last5.length === 0) {
         recent = NEUTRAL('JRAの出走歴なし（中立50点）');
       } else {
-        const ws = RECENT_WEIGHTS.slice(0, last5.length);
-        const graded = last5.map((r) => this.gradeOfRun(r));
-        const score = last5.reduce((s, r, i) => s + recentRunPoints(r.finishPosition, graded[i]) * ws[i], 0) / ws.reduce((a, b) => a + b, 0);
-        const bonusCount = graded.filter((g) => g !== null).length;
+        const bonusCount = last5.filter((r) => this.gradeOfRun(r) !== null).length;
         recent = {
-          score: Math.round(score),
+          score: recentScoreOf(last5) as number,
           hasData: true,
           detail: `近${last5.length}走: ${last5.map((r) => r.finishText || '-').join('-')}${bonusCount > 0 ? `（重賞等${bonusCount}走にクラス補正）` : ''}`,
         };

@@ -13,9 +13,10 @@
  *    倍率 0.5 / 1.0 / 1.5 の3通りを並べて測り、効き方（用量反応）を見る。
  *
  * グレードの取り方
- *  - horse_runs にはグレードの列が無いので、過去走の (日付・競馬場・レース番号) から
- *    races テーブルを引いて grade を得る。races に無い過去走は「不明＝上乗せなし」として扱い、
- *    どれだけ引けたか（カバー率）を最初に出す。カバー率が低いと補正の効きも小さく出る点に注意。
+ *  - 本番に適用済みの方式に合わせ、過去走のレース名の末尾（例「毎日王冠(GII)」）から読む
+ *    （score-service の gradeFromRaceName をそのまま使う）。
+ *  - 監査として、旧方式（races テーブルを (日付・競馬場・レース番号) で引く）との
+ *    カバー率の差と、両方で判定できた走での一致率・食い違いの例も出す。
  *
  * 数字の読み方（weight-tuner と同じ物差し・同じ採用基準）
  *  - 物差し：3着以内の馬が合計点の上位5頭に入った割合（%）。配分は今の採用中の配分を使う。
@@ -27,7 +28,7 @@
 import { openDatabase } from '../db/index';
 import { RaceRepository, type PredictionRecord, type RaceOutcome } from '../db/repository';
 import { COMPONENT_KEYS } from '../../src/utils/dataScore';
-import { finishPoints, activeWeights } from '../services/score-service';
+import { finishPoints, activeWeights, gradeFromRaceName, normalizeGrade as normalizeGradeProd, GRADE_BONUS } from '../services/score-service';
 import { venueCodeFromName, makeRaceKey } from '../domain/keys';
 import type { VenueCode } from '../domain/types';
 
@@ -37,20 +38,11 @@ const PREFERENCE: Record<string, number> = { auto: 0, eve: 1, backtest: 2, manua
 const SIGN_Z = 1.645;
 const MIN_DECIDED = 30;
 
-/** グレード表記（GI/G1 など）をそろえる。重賞・L・OP 以外は null */
-function normalizeGrade(g: string | null | undefined): 'G1' | 'G2' | 'G3' | 'L' | 'OP' | null {
-  if (!g) return null;
-  const s = g.toUpperCase();
-  if (s === 'GI' || s === 'G1') return 'G1';
-  if (s === 'GII' || s === 'G2') return 'G2';
-  if (s === 'GIII' || s === 'G3') return 'G3';
-  if (s === 'L') return 'L';
-  if (s === 'OP') return 'OP';
-  return null;
-}
+/** グレード表記（GI/G1 など）をそろえる。重賞・L・OP 以外は null（本体の normalizeGrade と同じ） */
+const normalizeGrade = normalizeGradeProd;
 
-/** 倍率1.0のときの上乗せ点 */
-const BONUS: Record<string, number> = { G1: 20, G2: 15, G3: 10, L: 5, OP: 5 };
+/** 倍率1.0のときの上乗せ点（本体の GRADE_BONUS と同じ値を使う） */
+const BONUS: Record<string, number> = GRADE_BONUS;
 const SCALES = [0.5, 1.0, 1.5];
 
 type Weights = Record<string, number>;
@@ -159,6 +151,11 @@ function main(): void {
     let covRuns = 0;
     let covKnown = 0;
     let covGraded = 0;
+    // 名前方式（本番の適用済み方式）との引き当て方式の比較
+    let nameGraded = 0;
+    let agreeBoth = 0;
+    let disagreeBoth = 0;
+    const disagreeSamples: string[] = [];
     let skippedHorses = 0;
     let recentCheckOk = 0;
     let recentCheckNg = 0;
@@ -193,11 +190,22 @@ function main(): void {
               else recentCheckNg++;
             }
             const grades = runs.map((r) => {
+              // 本番の適用済み方式（レース名の末尾から読む）で測る
+              const g = gradeFromRaceName(r.raceName);
+              if (g) nameGraded++;
+              // 旧方式（races テーブル引き当て）との比較（カバー率と一致率の監査用）
               const info = gradeOfRun(r.date, r.venueName, r.raceNo);
               covRuns++;
-              if (info.found) covKnown++;
-              const g = normalizeGrade(info.grade);
-              if (g) covGraded++;
+              if (info.found) {
+                covKnown++;
+                const joinG = normalizeGrade(info.grade);
+                if (joinG) covGraded++;
+                if (joinG === g) agreeBoth++;
+                else {
+                  disagreeBoth++;
+                  if (disagreeSamples.length < 10) disagreeSamples.push(`${r.date} ${r.raceName ?? ''}（表: ${joinG ?? 'なし'} / 名前: ${g ?? 'なし'}）`);
+                }
+              }
               return g;
             });
             for (const scale of SCALES) {
@@ -224,8 +232,18 @@ function main(): void {
     console.log(`[Class] 対象: ${samples.length}レース`);
     if (covRuns > 0) {
       console.log(
-        `[Class] グレードのカバー率: 近5走 ${covRuns}走のうち判明 ${covKnown}走（${Math.round((covKnown / covRuns) * 100)}%）・重賞等 ${covGraded}走（${Math.round((covGraded / covRuns) * 100)}%）`,
+        `[Class] グレードのカバー率（旧・表引き方式）: 近5走 ${covRuns}走のうち判明 ${covKnown}走（${Math.round((covKnown / covRuns) * 100)}%）・重賞等 ${covGraded}走（${Math.round((covGraded / covRuns) * 100)}%）`,
       );
+      console.log(
+        `[Class] グレードのカバー率（本番・名前方式）: 近5走 ${covRuns}走のうち重賞等 ${nameGraded}走（${Math.round((nameGraded / covRuns) * 100)}%）`,
+      );
+      const bothN = agreeBoth + disagreeBoth;
+      if (bothN > 0) {
+        console.log(
+          `[Class] 両方式の一致率: 表引きで判明した ${bothN}走のうち一致 ${agreeBoth}走（${Math.round((agreeBoth / bothN) * 1000) / 10}%）・食い違い ${disagreeBoth}走`,
+        );
+        for (const s of disagreeSamples) console.log(`[Class]   食い違い例: ${s}`);
+      }
     }
     console.log(`[Class] 近走点の再現チェック: 保存値と一致 ${recentCheckOk}頭 / 不一致 ${recentCheckNg}頭（不一致が多いときは過去走の取り直しで記録時と変わっています）`);
     if (skippedHorses > 0) console.log(`[Class] 馬IDが無くて近走を計算し直せなかった馬: ${skippedHorses}頭（その馬は補正なしとして扱います）`);
