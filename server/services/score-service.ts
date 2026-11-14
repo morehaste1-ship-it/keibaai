@@ -63,8 +63,12 @@ export function gradeFromRaceName(name: string | null | undefined): 'G1' | 'G2' 
  *  - capTotal : 1走は100点を超えてよく（G1の1着=120点）、近走の合計だけ100点で頭打ち
  */
 export type RecentClassMode = 'none' | 'capRun' | 'capTotal';
-/** 予想で使う掛け方（check-class.ts で3つを比べてから決める） */
-export const RECENT_CLASS_MODE: RecentClassMode = 'capRun';
+/**
+ * 予想で使う掛け方。同じ1着でもクラスで価値が違うため、1走は100点を超えてよい capTotal を使う。
+ * 2026-11-14 に check-class.ts で比較（11,577レース。確認用3,473レースで、補正なしに対して
+ * capRun +0.26pt・35勝8敗、capTotal +0.30pt・38勝7敗。capTotal と capRun の直接比較は 4勝0敗）
+ */
+export const RECENT_CLASS_MODE: RecentClassMode = 'capTotal';
 
 /** 近走1走分の点数（着順点＋クラス補正） */
 export function recentRunPoints(finish: number | null, grade: string | null, mode: RecentClassMode = RECENT_CLASS_MODE): number {
