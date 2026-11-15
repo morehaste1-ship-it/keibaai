@@ -1018,6 +1018,18 @@ export class RaceRepository {
   }
 
   /** 予想の記録があるか（種類を問わない） */
+  /** レースに記録済みの予想の種類（eve / auto / manual / backtest） */
+  predictionSourcesOf(raceKey: string): string[] {
+    return (this.db.prepare('SELECT source FROM prediction_records WHERE race_key = ?').all(raceKey) as { source: string }[]).map((r) => r.source);
+  }
+
+  /** 騎手成績の取得状況（保存済みの騎乗数と、5年前までさかのぼり終えたか） */
+  jockeyDataStateOf(jockeyId: string): { runs: number; backfillDone: boolean | null } {
+    const n = (this.db.prepare('SELECT COUNT(*) AS n FROM jockey_runs WHERE jockey_id = ?').get(jockeyId) as { n: number }).n;
+    const st = this.db.prepare('SELECT backfill_done FROM jockey_crawl_state WHERE jockey_id = ?').get(jockeyId) as { backfill_done: number } | undefined;
+    return { runs: n, backfillDone: st ? st.backfill_done === 1 : null };
+  }
+
   hasPredictionRecord(raceKey: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM prediction_records WHERE race_key = ? LIMIT 1').get(raceKey);
   }

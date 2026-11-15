@@ -27,6 +27,7 @@ function busyByOther(res: express.Response): boolean {
 }
 import { PedigreeService, PEDIGREE_MIN_RUNS } from './server/services/pedigree-service.ts';
 import { ReviewService, validateSettings } from './server/services/review-service.ts';
+import { raceStatus } from './server/services/race-status.ts';
 
 dotenv.config();
 
@@ -299,6 +300,22 @@ app.post('/api/history/collect', async (req, res) => {
 
 // 保存済みの過去結果を分析する（DB読み取りのみ）
 // query: condition=all|良|稍重|重|不良（詳細を表示する馬場。省略時は全馬場）、raceCondition=今回の馬場（強調表示用）
+// レースのデータの状態（馬番・オッズ・過去走・血統・騎手成績・過去10年・馬場・予想の記録）。DB読み取りのみ
+app.get('/api/races/:raceKey/status', (req, res) => {
+  try {
+    const { raceKey } = req.params;
+    if (!/^\d{8}-\d{2}-\d{2}$/.test(raceKey)) {
+      return res.status(400).json({ status: 'error', error: 'raceKey の形式が不正です' });
+    }
+    const st = raceStatus(repo, raceKey);
+    if (!st) return res.status(404).json({ status: 'error', error: '対象レースが未登録です' });
+    res.json({ status: 'success', raceStatus: st });
+  } catch (error: any) {
+    console.error('Error in /api/races/:raceKey/status:', error);
+    res.status(500).json({ status: 'error', error: error.message || 'Status failed' });
+  }
+});
+
 app.get('/api/history/analysis/:raceKey', (req, res) => {
   try {
     const { raceKey } = req.params;
