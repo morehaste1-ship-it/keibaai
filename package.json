@@ -20,7 +20,8 @@
     "past": "tsx server/scripts/run-past.ts",
     "tune": "tsx server/scripts/run-tune.ts",
     "combos": "tsx server/scripts/check-combos.ts",
-    "residual": "tsx server/scripts/check-residual.ts"
+    "residual": "tsx server/scripts/check-residual.ts",
+    "combo-adjust": "tsx server/scripts/check-combo-adjust.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
