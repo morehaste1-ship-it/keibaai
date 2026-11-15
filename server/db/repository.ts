@@ -115,6 +115,8 @@ export interface HistoryRunRecord {
   passing: string | null;
   corner4: number | null;
   fetchedAt: string;
+  /** netkeiba の馬ID（2026-11-15 以降に取得・取り直した走だけ。古い走は null） */
+  horseId?: string | null;
 }
 
 /** 答え合わせ用に記録した予想 */
@@ -294,11 +296,11 @@ export class RaceRepository {
       `INSERT INTO history_runs (
          source_race_id, horse_number, series_key, date, venue_name, race_name, surface, distance,
          track_condition, headcount, horse_name, finish_position, finish_text, popularity, win_odds,
-         passing, corner4, fetched_at
+         passing, corner4, fetched_at, horse_id
        ) VALUES (
          @sourceRaceId, @horseNumber, @seriesKey, @date, @venueName, @raceName, @surface, @distance,
          @trackCondition, @headcount, @horseName, @finishPosition, @finishText, @popularity, @winOdds,
-         @passing, @corner4, @fetchedAt
+         @passing, @corner4, @fetchedAt, @horseId
        )
        ON CONFLICT(source_race_id, horse_number) DO UPDATE SET
          series_key = excluded.series_key, date = excluded.date, venue_name = excluded.venue_name,
@@ -306,10 +308,11 @@ export class RaceRepository {
          track_condition = excluded.track_condition, headcount = excluded.headcount,
          horse_name = excluded.horse_name, finish_position = excluded.finish_position,
          finish_text = excluded.finish_text, popularity = excluded.popularity, win_odds = excluded.win_odds,
-         passing = excluded.passing, corner4 = excluded.corner4, fetched_at = excluded.fetched_at`,
+         passing = excluded.passing, corner4 = excluded.corner4, fetched_at = excluded.fetched_at,
+         horse_id = COALESCE(excluded.horse_id, history_runs.horse_id)`,
     );
     this.db.transaction(() => {
-      for (const r of runs) stmt.run(r);
+      for (const r of runs) stmt.run({ ...r, horseId: r.horseId ?? null });
     })();
   }
 
@@ -337,7 +340,22 @@ export class RaceRepository {
       passing: r.passing,
       corner4: r.corner4,
       fetchedAt: r.fetched_at,
+      horseId: r.horse_id ?? null,
     }));
+  }
+
+  /** 指定したシリーズの過去10年の出走馬のうち、馬IDがあって成績ページが未取得の馬（新しい開催の馬から） */
+  listHistoryHorseIdsToFetch(seriesKeys: string[]): { total: number; fetched: number; pending: string[] } {
+    if (seriesKeys.length === 0) return { total: 0, fetched: 0, pending: [] };
+    const rows = this.db
+      .prepare(
+        `SELECT h.horse_id AS id, MAX(h.date) AS d, MAX(s.horse_id IS NOT NULL) AS done
+           FROM history_runs h LEFT JOIN horse_crawl_state s ON s.horse_id = h.horse_id
+          WHERE h.horse_id IS NOT NULL AND h.series_key IN (${seriesKeys.map(() => '?').join(',')})
+          GROUP BY h.horse_id ORDER BY d DESC`,
+      )
+      .all(...seriesKeys) as { id: string; d: string; done: number }[];
+    return { total: rows.length, fetched: rows.filter((r) => r.done).length, pending: rows.filter((r) => !r.done).map((r) => r.id) };
   }
 
   // ---------- 騎手 ----------

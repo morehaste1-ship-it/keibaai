@@ -13,6 +13,8 @@ import { PoliteFetcher, type FetchFailedError, type RateLimitedError } from './f
 export interface RaceResultRow {
   horseNumber: number;
   horseName: string;
+  /** netkeiba の馬ID（馬名のリンクから。見つからなければ null） */
+  horseId?: string | null;
   finishText: string; // 着順の元表記（中止・除外などを含む）
   finishPosition: number | null;
   popularity: number | null;
@@ -469,9 +471,12 @@ export class NetkeibaSource implements RaceDataSource {
       const corner4 = passNums ? parseInt(passNums[passNums.length - 1], 10) : null;
 
       const l3 = iLast3f >= 0 ? Number.parseFloat(cells[iLast3f] ?? '') : NaN;
+      // 馬名のリンク（例: https://db.netkeiba.com/horse/2022105519）から馬IDを読む
+      const horseIdMatch = /\/horse\/([0-9A-Za-z]+)/.exec(rowHtml);
       rows.push({
         horseNumber,
         horseName,
+        horseId: horseIdMatch ? horseIdMatch[1] : null,
         finishText,
         finishPosition,
         popularity,

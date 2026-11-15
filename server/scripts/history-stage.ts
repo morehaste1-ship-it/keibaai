@@ -6,12 +6,15 @@
  * - 見つからなかった年（創設10年未満・名称変更など）は、レース当日まで毎晩探し直す
  * - 開催一覧が取得できない状態（netkeiba の一時的な不調）になったら、その夜はそこで止める
  * - 終了時刻を過ぎたら、残りは次の夜に回す
+ * - 結果は馬IDも保存する。馬IDが無い年（保存を始める前に取得）は、結果ページだけを読み直して補う
+ * - runHistoryHorseStage：過去10年に出た馬の成績ページを取る（休み明けの日数などを出すため）
  */
 import type { RaceRepository } from '../db/repository';
 import { NetkeibaSource } from '../sources/netkeiba';
 import { PoliteFetcher } from '../sources/fetcher';
 import { JraCalendar } from '../sources/jra-calendar';
-import { HistoryService, LIST_UNAVAILABLE } from '../services/history-service';
+import { HistoryService, LIST_UNAVAILABLE, seriesKeyOf } from '../services/history-service';
+import { HorseService } from '../services/horse-service';
 
 /** 何日先までの重賞を対象にするか */
 export const HISTORY_DAYS_AHEAD = 7;
@@ -22,7 +25,8 @@ function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-export async function runHistoryStage(repo: RaceRepository, deadline?: number, today = new Date()): Promise<void> {
+/** 今日から HISTORY_DAYS_AHEAD 日先までの重賞のレースキー */
+function targetRaceKeys(repo: RaceRepository, today: Date): string[] {
   const keys: string[] = [];
   for (let k = 0; k <= HISTORY_DAYS_AHEAD; k++) {
     const d = new Date(today);
@@ -30,6 +34,45 @@ export async function runHistoryStage(repo: RaceRepository, deadline?: number, t
     d.setDate(d.getDate() + k);
     keys.push(...repo.listRaceKeysByGradeOnDate(ymd(d), HISTORY_GRADES));
   }
+  return keys;
+}
+
+/** 過去10年の出走馬の成績ページを1晩に取る上限（5秒間隔で約50分） */
+export const HISTORY_HORSE_PAGE_BUDGET = 600;
+
+/**
+ * 対象の重賞の過去10年に出た馬の成績ページを取得する（休み明けの日数などを、その馬の前走から出すため）。
+ * 一度取った馬は取り直さない（引退した馬の成績は増えないため）。新しい開催の馬から順に取る
+ */
+export async function runHistoryHorseStage(
+  repo: RaceRepository,
+  source: NetkeibaSource,
+  deadline?: number,
+  today = new Date(),
+  budget = HISTORY_HORSE_PAGE_BUDGET,
+): Promise<{ rateLimited: boolean }> {
+  const seriesKeys = [
+    ...new Set(
+      targetRaceKeys(repo, today)
+        .map((k) => repo.getRace(k))
+        .filter((r): r is NonNullable<typeof r> => !!r)
+        .map((r) => seriesKeyOf(r.name, r.venueName, r.surface, r.distance)),
+    ),
+  ];
+  const t = repo.listHistoryHorseIdsToFetch(seriesKeys);
+  console.log(`[HistoryHorse] 過去10年の出走馬 ${t.total}頭のうち成績取得済み ${t.fetched}頭・今回の対象 ${Math.min(t.pending.length, budget)}頭`);
+  if (t.pending.length === 0) return { rateLimited: false };
+  const status = await new HorseService(source, repo).crawl(t.pending, budget, deadline);
+  console.log(
+    `[HistoryHorse] done: ${status.doneHorses}/${status.totalHorses}頭, ${status.pagesFetched} pages` +
+      (status.stoppedReason ? ` / 中断: ${status.stoppedReason}` : ''),
+  );
+  for (const e of status.errors.slice(0, 20)) console.log(`[HistoryHorse] NG ${e}`);
+  return { rateLimited: status.rateLimited };
+}
+
+export async function runHistoryStage(repo: RaceRepository, deadline?: number, today = new Date()): Promise<void> {
+  const keys = targetRaceKeys(repo, today);
   console.log(`[History] 対象の重賞 ${keys.length}レース（今日から${HISTORY_DAYS_AHEAD}日先まで）`);
   if (keys.length === 0) return;
 

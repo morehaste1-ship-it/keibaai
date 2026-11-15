@@ -197,13 +197,27 @@ export class HistoryService {
         .filter((n) => n.length > 0),
     ];
 
-    // 保存済みの年（取り直さない。ただし馬場が不明の年は取り直す）
-    const savedYears = new Map<number, { date: string; venueName: string; raceId: string; horses: number; condition: string | null }>();
+    // 保存済みの年（取り直さない。ただし馬場が不明の年・馬IDが無い年は、保存済みのレースIDで結果ページだけを読み直して補う）
+    const savedYears = new Map<
+      number,
+      { date: string; venueName: string; raceId: string; horses: number; condition: string | null; withId: number }
+    >();
     for (const r of this.repo.listHistoryRuns(seriesKey)) {
       const y = Number(r.date.slice(0, 4));
       const cur = savedYears.get(y);
-      if (cur) cur.horses++;
-      else savedYears.set(y, { date: r.date, venueName: r.venueName, raceId: r.sourceRaceId, horses: 1, condition: r.trackCondition });
+      if (cur) {
+        cur.horses++;
+        if (r.horseId) cur.withId++;
+      } else {
+        savedYears.set(y, {
+          date: r.date,
+          venueName: r.venueName,
+          raceId: r.sourceRaceId,
+          horses: 1,
+          condition: r.trackCondition,
+          withId: r.horseId ? 1 : 0,
+        });
+      }
     }
 
     let unavailable = false;
@@ -215,8 +229,8 @@ export class HistoryService {
           continue;
         }
         const saved = savedYears.get(year);
-        // 馬場が不明のまま保存された年（以前の読み取りの不具合）は、取り直して馬場を補う
-        if (saved && saved.condition !== null) {
+        // 馬場が不明のまま保存された年（以前の読み取りの不具合）・馬IDが無い年（馬IDの保存を始める前に取得）は補う
+        if (saved && saved.condition !== null && saved.withId > 0) {
           results.push({
             year,
             status: 'saved',
@@ -228,6 +242,18 @@ export class HistoryService {
             message: `保存済み（${saved.date} ${saved.venueName}・${saved.horses}頭・馬場: ${saved.condition ?? '不明'}）`,
           });
           continue;
+        }
+        if (saved) {
+          // 開催は分かっているので、開催一覧は探さずに結果ページだけを読み直す（失敗したら通常の探し方に戻る）
+          try {
+            const page = await this.source.fetchRaceResult({ source: 'netkeiba', id: saved.raceId });
+            if (names.includes(normalizeRaceName(page.raceName)) && page.surface === race.surface && page.distance === race.distance) {
+              results.push(this.saveYear(year, { raceId: saved.raceId, date: saved.date, trackName: saved.venueName }, page, race, seriesKey));
+              continue;
+            }
+          } catch {
+            // 通常の探し方に戻る
+          }
         }
         try {
           const r = await this.collectYear(year, base, race, names, seriesKey);
@@ -335,9 +361,20 @@ export class HistoryService {
       };
     }
 
+    return this.saveYear(year, { raceId: hit.raceId, date: hit.date, trackName: hit.trackName }, page, race, seriesKey);
+  }
+
+  /** 見つかった開催の結果を保存する */
+  private saveYear(
+    year: number,
+    found: { raceId: string; date: string; trackName: string },
+    result: Awaited<ReturnType<NetkeibaSource['fetchRaceResult']>>,
+    race: { venueName: string },
+    seriesKey: string,
+  ): HistoryYearResult {
     const fetchedAt = new Date().toISOString();
-    const found = hit;
-    const result = page;
+    const hit = found;
+    const page = result;
     const runs: HistoryRunRecord[] = result.rows.map((r) => ({
       sourceRaceId: found.raceId,
       horseNumber: r.horseNumber,
@@ -357,6 +394,7 @@ export class HistoryService {
       passing: r.passing,
       corner4: r.corner4,
       fetchedAt,
+      horseId: r.horseId ?? null,
     }));
 
     this.repo.saveHistoryRuns(runs);

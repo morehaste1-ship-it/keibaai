@@ -431,4 +431,13 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_horse_runs_course ON horse_runs (surface, distance, venue_name, track_condition, date);
     `,
   },
+  {
+    version: 16,
+    name: 'history_runs_horse_id',
+    sql: `
+      -- 過去10年の同一レースの出走馬の netkeiba 馬ID（休み明けなどの間隔を、その馬の成績から出すため。追加前に取得した走は NULL）
+      ALTER TABLE history_runs ADD COLUMN horse_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_history_horse ON history_runs(horse_id);
+    `,
+  },
 ];

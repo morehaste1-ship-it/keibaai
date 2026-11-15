@@ -31,7 +31,7 @@ import { ReviewService } from '../services/review-service';
 import { backupDatabase, uploadOffsite } from '../services/db-backup';
 import { runPastStage } from './past-stage';
 import { logWeightReview } from './tune-stage';
-import { runHistoryStage } from './history-stage';
+import { runHistoryHorseStage, runHistoryStage } from './history-stage';
 import { DEFAULT_DB_PATH } from '../db/index';
 import { DEFAULT_BACKUP_DIR } from '../services/db-backup';
 import { dbShrinkProblem, diskShortage, pruneCache } from '../services/maintenance';
@@ -178,6 +178,15 @@ async function main(): Promise<void> {
 
     const dbFetcher = createDbFetcher(repo);
     const horse = await runHorseStage(repo, dbFetcher, 3000, deadline);
+    // 重賞の過去10年に出た馬の成績（出走馬の成績のあと、騎手成績の前。1晩600ページまで）
+    if (!horse.rateLimited && Date.now() < deadline) {
+      try {
+        const hh = await runHistoryHorseStage(repo, new NetkeibaSource(dbFetcher), deadline);
+        if (hh.rateLimited) horse.rateLimited = true;
+      } catch (err: any) {
+        console.log(`[HistoryHorse] 過去10年の出走馬の成績の取得を中断しました（${err?.message ?? err}）`);
+      }
+    }
     if (horse.rateLimited) {
       console.log('[Jockey] アクセス制限を受けたため、騎手成績の取得は次回に回します');
     } else if (Date.now() < deadline) {

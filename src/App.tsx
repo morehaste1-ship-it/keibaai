@@ -18,8 +18,6 @@ import { RealPaceView } from './components/RealPaceView';
 import { RealTicketsView } from './components/RealTicketsView';
 import { RealHeatmapView } from './components/RealHeatmapView';
 import { RealAiView } from './components/RealAiView';
-import { RaceDataStatus } from './components/RaceDataStatus';
-import { SideNav, scrollToSection, type NavItem } from './components/SideNav';
 import type { RealDataView } from './utils/trifecta';
 import type { PredictionMark, DataMarkInfo, RunningStyle } from './types/keiba';
 import {
@@ -79,28 +77,63 @@ function toRaceFromCard(raceCard: any): Race {
   };
 }
 
-/** 出馬表の下のタブ（目次にも同じ並びで出す） */
-const MAIN_TABS = [
-  { id: 'card' as TabType, label: '出馬表＆予想印', icon: Table2, badge: '印自動生成' },
-  { id: 'heatmap' as TabType, label: 'データ予想ヒートマップ', icon: Flame, badge: '実データ' },
-  { id: 'upset' as TabType, label: '人気馬死角＆中穴・大穴推奨', icon: ShieldAlert, badge: '実データ' },
-  { id: 'pace' as TabType, label: '展開＆ハナ切り馬分析', icon: Compass, badge: '実データ' },
-  { id: 'tickets' as TabType, label: 'AI推奨買い目＆資金配分', icon: Ticket, badge: '実データ' },
-  { id: 'pedigree' as TabType, label: '血統＆適性マトリクス', icon: Dna, badge: '実データ' },
-  { id: 'ai' as TabType, label: 'Gemini AI 専門家深掘り', icon: BrainCircuit, badge: '実データ' },
-];
+// 画面の選択状態の保存先（スマホで画面が消えてページが読み直されても、選択中のレース等が戻るように）
+const UI_STATE_KEYS = {
+  raceId: 'keibaai.ui.selectedRaceId',
+  pastDate: 'keibaai.ui.pastDate',
+  tab: 'keibaai.ui.activeTab',
+  weather: 'keibaai.ui.weather',
+  condition: 'keibaai.ui.condition',
+} as const;
+
+function loadUiString(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function saveUiString(key: string, value: string | null): void {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    // 保存できなくても画面の動作には影響させない
+  }
+}
+
+const TAB_TYPES: TabType[] = ['card', 'heatmap', 'upset', 'pace', 'tickets', 'pedigree', 'ai'];
+const WEATHER_TYPES: WeatherCondition[] = ['晴', '曇', '小雨', '雨'];
+const CONDITION_TYPES: TrackCondition[] = ['良', '稍重', '重', '不良'];
 
 export default function App() {
   // レースはフェーズ3でデータベースから読み込む。それまでは未登録（0件）で起動する
   const [races, setRaces] = useState<Race[]>([]);
-  const [selectedRaceId, setSelectedRaceId] = useState<string>('');
-  const [currentWeather, setCurrentWeather] = useState<WeatherCondition>('晴');
-  const [currentCondition, setCurrentCondition] = useState<TrackCondition>('良');
-  const [activeTab, setActiveTab] = useState<TabType>('card');
+  const [selectedRaceId, setSelectedRaceId] = useState<string>(() => loadUiString(UI_STATE_KEYS.raceId) ?? '');
+  const [currentWeather, setCurrentWeather] = useState<WeatherCondition>(() => {
+    const v = loadUiString(UI_STATE_KEYS.weather);
+    return WEATHER_TYPES.includes(v as WeatherCondition) ? (v as WeatherCondition) : '晴';
+  });
+  const [currentCondition, setCurrentCondition] = useState<TrackCondition>(() => {
+    const v = loadUiString(UI_STATE_KEYS.condition);
+    return CONDITION_TYPES.includes(v as TrackCondition) ? (v as TrackCondition) : '良';
+  });
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const v = loadUiString(UI_STATE_KEYS.tab);
+    return TAB_TYPES.includes(v as TabType) ? (v as TabType) : 'card';
+  });
   const [isAddHorseOpen, setIsAddHorseOpen] = useState<boolean>(false);
   const [hasGeminiKey, setHasGeminiKey] = useState<boolean>(false);
   // 表示中の過去の日付（null = 本日以降を表示）
-  const [pastDate, setPastDate] = useState<string | null>(null);
+  const [pastDate, setPastDate] = useState<string | null>(() => loadUiString(UI_STATE_KEYS.pastDate));
+
+  // 選択状態が変わるたびに保存する（ページが読み直されても復元できるように）
+  useEffect(() => saveUiString(UI_STATE_KEYS.raceId, selectedRaceId || null), [selectedRaceId]);
+  useEffect(() => saveUiString(UI_STATE_KEYS.pastDate, pastDate), [pastDate]);
+  useEffect(() => saveUiString(UI_STATE_KEYS.tab, activeTab), [activeTab]);
+  useEffect(() => saveUiString(UI_STATE_KEYS.weather, currentWeather), [currentWeather]);
+  useEffect(() => saveUiString(UI_STATE_KEYS.condition, currentCondition), [currentCondition]);
 
   // スクレイピング関連の state
   const [raceInputValue, setRaceInputValue] = useState<string>('');
@@ -129,8 +162,10 @@ export default function App() {
       .then((res) => res.json())
       .then((data) => {
         if (cancelled || !Array.isArray(data.raceCards)) return;
-        setRaces(data.raceCards.map(toRaceFromCard));
-        setSelectedRaceId('');
+        const loaded: Race[] = data.raceCards.map(toRaceFromCard);
+        setRaces(loaded);
+        // 読み直し（画面オフ等）で復元した選択が、この一覧にある間は維持する。無い場合だけ先頭のレース表示に戻す
+        setSelectedRaceId((prev) => (prev && loaded.some((r) => r.id === prev) ? prev : ''));
       })
       .catch((err) => console.log('Saved race list load info:', err));
     return () => {
@@ -241,32 +276,48 @@ export default function App() {
     }
   };
 
-  // 左の目次の項目（レースが選ばれていないときは、レースごとの欄を出さない）
-  const navItems: NavItem[] = [
-    ...(selectedRace
-      ? [
-          { id: 'sec-status', label: 'データの状態', group: 'このレース' },
-          { id: 'sec-predict', label: 'データ予想・3連単', group: 'このレース' },
-          { id: 'sec-tabs', label: '出馬表・各種分析', group: 'このレース' },
-          ...MAIN_TABS.map((t) => ({
-            id: 'sec-tabs',
-            label: t.label,
-            group: 'このレース',
-            indent: true,
-            current: activeTab === t.id,
-            onSelect: () => setActiveTab(t.id),
-          })),
-          { id: 'sec-history', label: '過去10年の同一レース', group: 'このレース' },
-          { id: 'sec-jockey', label: '騎手分析', group: 'このレース' },
-          { id: 'sec-matchup', label: '脚質×騎手の相性', group: 'このレース' },
-        ]
-      : []),
-    { id: 'sec-review', label: '答え合わせ・配分の見直し', group: '全体・管理' },
-    { id: 'sec-fetch', label: '出馬表の取得', group: '全体・管理' },
-  ];
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-white">
+      {/* Race Scraping Form */}
+      <div className="bg-slate-900/50 border-b border-slate-800 px-4 py-4">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+              <Download className="w-3.5 h-3.5 text-emerald-400" />
+              netkeiba からレースをスクレイピング
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={raceInputValue}
+                onChange={(e) => setRaceInputValue(e.target.value)}
+                placeholder="レース ID (12 digits) または netkeiba URL"
+                onKeyPress={(e) => e.key === 'Enter' && handleFetchRace()}
+                disabled={isFetching}
+                className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+              />
+              <button
+                onClick={handleFetchRace}
+                disabled={isFetching}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                <Download className="w-4 h-4" />
+                {isFetching ? 'スクレイピング中...' : '取得'}
+              </button>
+            </div>
+            {fetchError && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-300">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                {fetchError}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Weekend Batch (manual fetch by date) */}
+      <WeekendBatchButton />
+
       {/* Top Navigation & Live Condition Toggles */}
       <Header
         races={races}
@@ -283,177 +334,112 @@ export default function App() {
         onBackToUpcoming={() => setPastDate(null)}
       />
 
-      {/* 左の目次＋本文 */}
-      <div className="flex w-full">
-        <SideNav items={navItems} />
-        <div className="flex-1 min-w-0 flex flex-col">
-          {/* データの状態（馬番・オッズ・過去走・血統・騎手成績・過去10年・馬場・予想の記録） */}
-          {selectedRace && (
-            <div id="sec-status">
-              <RaceDataStatus
-                key={`s-${selectedRace.id}`}
-                raceKey={selectedRace.id}
-                refreshToken={realData}
-                onJump={(k) => scrollToSection(k === 'history' ? 'sec-history' : 'sec-jockey')}
-              />
-            </div>
+      {/* データ予想（実データの点数と印。配分はスライダーで変更） */}
+      {selectedRace && (
+        <DataPredictionPanel
+          key={`d-${selectedRace.id}`}
+          raceKey={selectedRace.id}
+          condition={currentCondition}
+          onMarks={setDataMarks}
+          onData={setRealData}
+        />
+      )}
+
+      {/* 過去10年の同一レース分析（レースを切り替えるとリセットされる） */}
+      {selectedRace && (
+        <HistoryPanel key={selectedRace.id} raceKey={selectedRace.id} condition={currentCondition} />
+      )}
+
+      {/* 騎手分析（過去5年） */}
+      {selectedRace && <JockeyPanel key={`j-${selectedRace.id}`} raceKey={selectedRace.id} />}
+
+      {/* 馬の脚質 × 騎手の相性 */}
+      {selectedRace && <MatchupPanel key={`m-${selectedRace.id}`} raceKey={selectedRace.id} />}
+
+      {/* 予想の答え合わせ（記録した予想と確定結果の照合。全レース共通） */}
+      <ReviewPanel />
+
+      {/* Main Content Area */}
+      {!evaluatedData ? (
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
+        <div className="border border-dashed border-slate-700 rounded-xl p-10 text-center text-slate-400">
+          <p className="text-base font-bold text-slate-200">レース未登録</p>
+          <p className="text-sm mt-2">レースを取り込むと、出馬表と予想が表示されます。</p>
+        </div>
+      </main>
+      ) : (
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6 space-y-6">
+        {/* Race Overview Card */}
+        <RaceSummaryCard
+          race={evaluatedData.race}
+          course={evaluatedData.course}
+          paceAnalysis={evaluatedData.paceAnalysis}
+        />
+
+        {/* Tab Navigation Navigation */}
+        <div className="border-b border-slate-800 flex items-center gap-1 sm:gap-2 overflow-x-auto pb-px">
+          {[
+            { id: 'card' as TabType, label: '出馬表＆予想印', icon: Table2, badge: '印自動生成' },
+            { id: 'heatmap' as TabType, label: 'データ予想ヒートマップ', icon: Flame, badge: '実データ' },
+            { id: 'upset' as TabType, label: '人気馬死角＆中穴・大穴推奨', icon: ShieldAlert, badge: '実データ' },
+            { id: 'pace' as TabType, label: '展開＆ハナ切り馬分析', icon: Compass, badge: '実データ' },
+            { id: 'tickets' as TabType, label: 'AI推奨買い目＆資金配分', icon: Ticket, badge: '実データ' },
+            { id: 'pedigree' as TabType, label: '血統＆適性マトリクス', icon: Dna, badge: '実データ' },
+            { id: 'ai' as TabType, label: 'Gemini AI 専門家深掘り', icon: BrainCircuit, badge: '実データ' },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 px-3 sm:px-4 py-3 border-b-2 text-xs sm:text-sm font-bold transition whitespace-nowrap ${
+                  isActive
+                    ? 'border-emerald-400 text-white bg-slate-900/60'
+                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                }`}
+              >
+                <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <span>{tab.label}</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold hidden sm:inline ${
+                  isActive ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {tab.badge}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="text-[11px] text-amber-300/80">
+          印と各タブの内容は、上の「データ予想」（実データ）の結果です。配分や設定を変えると連動して変わります。
+        </p>
+
+        {/* Tab Contents */}
+        <div className="animate-in fade-in duration-200">
+          {activeTab === 'card' && (
+            <RaceCardTable
+              horses={evaluatedData.horses}
+              course={evaluatedData.course}
+              onNavigateToHeatmap={() => setActiveTab('heatmap')}
+            />
           )}
 
-          <div id="sec-predict">
-            {/* データ予想（実データの点数と印。配分はスライダーで変更） */}
-            {selectedRace && (
-              <DataPredictionPanel
-                key={`d-${selectedRace.id}`}
-                raceKey={selectedRace.id}
-                condition={currentCondition}
-                onMarks={setDataMarks}
-                onData={setRealData}
-              />
-            )}
-          </div>
+          {activeTab === 'heatmap' && <RealHeatmapView data={realData} />}
 
-          <div id="sec-tabs">
-            {/* Main Content Area */}
-            {!evaluatedData ? (
-            <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
-              <div className="border border-dashed border-slate-700 rounded-xl p-10 text-center text-slate-400">
-                <p className="text-base font-bold text-slate-200">レース未登録</p>
-                <p className="text-sm mt-2">レースを取り込むと、出馬表と予想が表示されます。</p>
-              </div>
-            </main>
-            ) : (
-            <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6 space-y-6">
-              {/* Race Overview Card */}
-              <RaceSummaryCard
-                race={evaluatedData.race}
-                course={evaluatedData.course}
-                paceAnalysis={evaluatedData.paceAnalysis}
-              />
+          {activeTab === 'upset' && <RealUpsetView data={realData} />}
 
-              {/* Tab Navigation Navigation */}
-              <div className="border-b border-slate-800 flex items-center gap-1 sm:gap-2 overflow-x-auto pb-px">
-                {MAIN_TABS.map((tab) => {
-                  const Icon = tab.icon;
-                  const isActive = activeTab === tab.id;
+          {activeTab === 'pace' && <RealPaceView data={realData} />}
 
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      className={`flex items-center gap-2 px-3 sm:px-4 py-3 border-b-2 text-xs sm:text-sm font-bold transition whitespace-nowrap ${
-                        isActive
-                          ? 'border-emerald-400 text-white bg-slate-900/60'
-                          : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                      }`}
-                    >
-                      <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
-                      <span>{tab.label}</span>
-                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold hidden sm:inline ${
-                        isActive ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'
-                      }`}>
-                        {tab.badge}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+          {activeTab === 'tickets' && <RealTicketsView data={realData} />}
 
-              <p className="text-[11px] text-amber-300/80">
-                印と各タブの内容は、上の「データ予想」（実データ）の結果です。配分や設定を変えると連動して変わります。
-              </p>
+          {activeTab === 'pedigree' && <RealPedigreeView data={realData} />}
 
-              {/* Tab Contents */}
-              <div className="animate-in fade-in duration-200">
-                {activeTab === 'card' && (
-                  <RaceCardTable
-                    horses={evaluatedData.horses}
-                    course={evaluatedData.course}
-                    onNavigateToHeatmap={() => setActiveTab('heatmap')}
-                  />
-                )}
-
-                {activeTab === 'heatmap' && <RealHeatmapView data={realData} />}
-
-                {activeTab === 'upset' && <RealUpsetView data={realData} />}
-
-                {activeTab === 'pace' && <RealPaceView data={realData} />}
-
-                {activeTab === 'tickets' && <RealTicketsView data={realData} />}
-
-                {activeTab === 'pedigree' && <RealPedigreeView data={realData} />}
-
-                {activeTab === 'ai' && <RealAiView data={realData} />}
-              </div>
-            </main>
-            )}
-          </div>
-
-          <div id="sec-history">
-            {/* 過去10年の同一レース分析（レースを切り替えるとリセットされる） */}
-            {selectedRace && (
-              <HistoryPanel key={selectedRace.id} raceKey={selectedRace.id} condition={currentCondition} />
-            )}
-          </div>
-
-          <div id="sec-jockey">
-            {/* 騎手分析（過去5年） */}
-            {selectedRace && <JockeyPanel key={`j-${selectedRace.id}`} raceKey={selectedRace.id} />}
-          </div>
-
-          <div id="sec-matchup">
-            {/* 馬の脚質 × 騎手の相性 */}
-            {selectedRace && <MatchupPanel key={`m-${selectedRace.id}`} raceKey={selectedRace.id} />}
-          </div>
-
-          <div id="sec-review">
-            {/* 予想の答え合わせ（記録した予想と確定結果の照合。全レース共通） */}
-            <ReviewPanel />
-          </div>
-
-          <div id="sec-fetch">
-            {/* 出馬表の取得（週末・日付指定の一括取得と、レースIDでの取得） */}
-            <WeekendBatchButton />
-
-            {/* Race Scraping Form */}
-            <div className="bg-slate-900/50 border-b border-slate-800 px-4 py-4">
-              <div className="max-w-7xl mx-auto">
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                    <Download className="w-3.5 h-3.5 text-emerald-400" />
-                    netkeiba からレースをスクレイピング
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={raceInputValue}
-                      onChange={(e) => setRaceInputValue(e.target.value)}
-                      placeholder="レース ID (12 digits) または netkeiba URL"
-                      onKeyPress={(e) => e.key === 'Enter' && handleFetchRace()}
-                      disabled={isFetching}
-                      className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
-                    />
-                    <button
-                      onClick={handleFetchRace}
-                      disabled={isFetching}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-                    >
-                      <Download className="w-4 h-4" />
-                      {isFetching ? 'スクレイピング中...' : '取得'}
-                    </button>
-                  </div>
-                  {fetchError && (
-                    <div className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-300">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      {fetchError}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
+          {activeTab === 'ai' && <RealAiView data={realData} />}
         </div>
-      </div>
+      </main>
+      )}
 
       {/* Footer */}
       <footer className="border-t border-slate-800 bg-slate-950 py-6 mt-12 text-slate-500 text-xs">
