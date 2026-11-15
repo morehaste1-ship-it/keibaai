@@ -18,7 +18,8 @@
     "backup": "tsx server/scripts/run-backup.ts",
     "odds:morning": "tsx server/scripts/run-morning.ts",
     "past": "tsx server/scripts/run-past.ts",
-    "tune": "tsx server/scripts/run-tune.ts"
+    "tune": "tsx server/scripts/run-tune.ts",
+    "combos": "tsx server/scripts/check-combos.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
