@@ -92,6 +92,7 @@ const COMPONENT_COLORS: Record<string, string> = {
   position: 'bg-teal-300',
   jockeyPos: 'bg-fuchsia-400',
   trend: 'bg-amber-200',
+  pattern: 'bg-red-500',
 };
 
 /** 保存済みの配分を読み、無い項目（新しく増えた項目など）は既定値で補う */

@@ -494,6 +494,22 @@ export class RaceRepository {
     })();
   }
 
+  /** 組み合わせ補正用：その馬の、指定日より前の最後の走（無ければ null） */
+  latestHorseRunBefore(
+    horseId: string,
+    date: string,
+  ): { date: string; raceName: string | null; distance: number | null; finishPosition: number | null; runningStyle: string | null } | null {
+    const r = this.db
+      .prepare('SELECT date, race_name, distance, finish_position, running_style FROM horse_runs WHERE horse_id = ? AND date < ? ORDER BY date DESC LIMIT 1')
+      .get(horseId, date) as any;
+    return r ? { date: r.date, raceName: r.race_name, distance: r.distance, finishPosition: r.finish_position, runningStyle: r.running_style } : null;
+  }
+
+  /** 組み合わせ補正用：その馬の走が1つでも保存されているか（成績ページを取得済みか） */
+  hasHorseRuns(horseId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM horse_runs WHERE horse_id = ? LIMIT 1').get(horseId);
+  }
+
   getHorseFetchedAt(horseId: string): string | null {
     const r = this.db.prepare('SELECT fetched_at FROM horse_crawl_state WHERE horse_id = ?').get(horseId) as
       | { fetched_at: string }

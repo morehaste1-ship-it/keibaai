@@ -6,7 +6,7 @@
  * 方法
  *  結果のそろった予想の記録（1レース1件）について、各馬の「組み合わせ補正」の点数を計算する
  *  （server/services/combo-adjust.ts。補正の大きさは、そのレースの月より前の記録だけで計算するので未来の結果は混ざらない）。
- *  今の配分に、組み合わせ補正を 0・3・5・10・15・20 の配分で足した場合の成績
+ *  今の配分（組み合わせを除く）に、組み合わせ補正を 0・3・5・10・13・15・20 の配分で足した場合の成績
  *  （3着以内の馬が合計点の上位5頭に入った割合・1位の馬の3着内率）と、1レースずつの勝敗（補正なしとの比較）を出す。
  *  配分の見直しと同じく、新しい3割のレース（確認用）の結果を主に見る
  */
@@ -14,7 +14,9 @@ import { openDatabase } from '../db/index';
 import { RaceRepository } from '../db/repository';
 import { buildSamples, type TuneSample } from '../services/weight-tuner';
 import { activeWeights } from '../services/score-service';
-import { COMPONENT_KEYS } from '../../src/utils/dataScore';
+import { COMPONENT_KEYS as ALL_KEYS } from '../../src/utils/dataScore';
+// 「組み合わせ」の項目は、調べる対象そのものなので合計点から除く
+const COMPONENT_KEYS = ALL_KEYS.filter((k) => k !== 'pattern');
 import {
   COMBO_MIN_ITEMS,
   comboCellsOf,
@@ -27,7 +29,7 @@ import {
 
 const HOLDOUT_SHARE = 0.3;
 const TOP_N = 5;
-const COMBO_WEIGHTS = [0, 3, 5, 10, 15, 20];
+const COMBO_WEIGHTS = [0, 3, 5, 10, 13, 15, 20];
 
 interface HorseRow {
   horseNumber: number;

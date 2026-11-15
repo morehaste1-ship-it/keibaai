@@ -5,6 +5,7 @@
  *       / 枠（コースの枠の有利不利）/ 条件替わり（距離・芝ダの変化）/ 休み明け
  *       / 位置どり（コース・馬場ごとの4角の位置の有利不利）/ 騎手の位置どり（騎手の癖で位置が有利な方へ動くか）
  *       / 馬場傾向（直近2週の同じ競馬場・芝ダの結果の偏り。当日の結果は使わない）
+ *       / 組み合わせ（ほかの項目の合計点で説明しきれない傾向を過去の予想の結果から学んだ補正。combo-adjust.ts）
  * 配分（重み）は画面側で掛けて合計する（スライダーで変えられるように）。
  * DB は読むだけで書き込まない。
  * 未来のデータが混ざらないよう、馬・騎手・過去10年の成績はすべて「レース日より前」のものだけを使う
@@ -17,6 +18,8 @@ import { seriesKeyOf } from './history-service';
 import { PedigreeService } from './pedigree-service';
 import { buildAptitudeMatrix, type AptitudeMatrix } from './aptitude-matrix';
 import { TENDENCY_K, biasText, courseBias, groupOf, jockeyTendencies, summarizeBias, usualRatio } from './position-service';
+import { comboCellsOf, comboScoreOf, type ComboCells } from './combo-adjust';
+import { comboTableFor } from './combo-provider';
 
 /** 着順の点数（近走） */
 export function finishPoints(finish: number | null): number {
@@ -198,6 +201,7 @@ export interface ScoreItem {
     position: ScoreComponent;
     jockeyPos: ScoreComponent;
     trend: ScoreComponent;
+    pattern: ScoreComponent;
   };
 }
 
@@ -232,7 +236,15 @@ export const DEFAULT_WEIGHTS: ScoreResult['defaultWeights'] = {
   position: 0,
   jockeyPos: 0,
   trend: 0,
+  // 組み合わせ補正：2026-11-15 検証（ほかの項目の合計100に15を足した配分＝全体の約13%で、確認用3,609レースの上位5頭に3着内 +0.78pt・186勝103敗 z=4.88）。check-combo-adjust.ts
+  pattern: 13,
 };
+
+/**
+ * あとから追加した項目の初期の割合（%）。採用中の配分にその項目が無いときは、ほかの項目を同じ比のまま縮めて、
+ * この割合を空ける（合計を変えないため。合計が100からずれると画面に「100%ではありません」と出る）
+ */
+const ADDED_SHARE: Partial<Record<keyof ScoreResult['defaultWeights'], number>> = { pattern: 13 };
 
 /** 着差（秒）→ 点数。勝ち（マイナス・0）は100点 */
 export function marginPoints(margin: number): number {
@@ -254,6 +266,39 @@ export function activeWeights(repo: RaceRepository): ScoreResult['defaultWeights
   const v = repo.getActiveWeightVersion();
   const out = { ...DEFAULT_WEIGHTS };
   if (v) for (const k of Object.keys(out) as (keyof typeof out)[]) if (typeof v.weights[k] === 'number') out[k] = v.weights[k];
+  return withAddedShares(out, (k) => !v || typeof v.weights[k] !== 'number');
+}
+
+/** 採用中の配分に無い追加項目に、ADDED_SHARE の割合を空ける（ほかの項目は比を保って整数に丸め、合計は元のまま） */
+export function withAddedShares(
+  w: ScoreResult['defaultWeights'],
+  isMissing: (k: keyof ScoreResult['defaultWeights']) => boolean,
+): ScoreResult['defaultWeights'] {
+  const keys = Object.keys(w) as (keyof typeof w)[];
+  const missing = keys.filter((k) => (ADDED_SHARE[k] ?? 0) > 0 && isMissing(k));
+  if (missing.length === 0) return w;
+  const others = keys.filter((k) => !missing.includes(k));
+  const total = others.reduce((s, k) => s + Math.max(0, w[k] ?? 0), 0);
+  if (total <= 0) return w;
+  const share = missing.reduce((s, k) => s + (ADDED_SHARE[k] ?? 0), 0) / 100;
+  const target = Math.round(total * (1 - share));
+  // 最大剰余法：切り捨ててから、端数の大きい順に1ずつ足して target にそろえる
+  const raw = others.map((k) => ({ k, x: (Math.max(0, w[k] ?? 0) * target) / total }));
+  const out = { ...w };
+  for (const r of raw) out[r.k] = Math.floor(r.x);
+  let rest = target - raw.reduce((s, r) => s + Math.floor(r.x), 0);
+  for (const r of [...raw].sort((a, b) => (b.x - Math.floor(b.x)) - (a.x - Math.floor(a.x)))) {
+    if (rest <= 0) break;
+    out[r.k]++;
+    rest--;
+  }
+  // 空けた分を追加項目に割り振る（割合の比で。端数は最後の項目に）
+  let left = total - target;
+  missing.forEach((k, i) => {
+    const v = i === missing.length - 1 ? left : Math.round(((total - target) * (ADDED_SHARE[k] ?? 0)) / (share * 100));
+    out[k] = v;
+    left -= v;
+  });
   return out;
 }
 
@@ -413,6 +458,9 @@ export class ScoreService {
     const recentDays = [...new Set(recentOutcomes.map((o) => o.date.slice(5).replace('-', '/')))];
     const fmtRatio = (r: number) => `${Math.round(r * 100)}%`;
     const biasCond = cBias ? `${race.venueName}${race.surface}${race.distance}m${cBias.condition ? `・${cBias.condition}` : '・全馬場'}` : '';
+
+    // 組み合わせ補正の表（そのレースの月より前の予想の記録で作る。月ごと・配分の版ごとに使い回す）
+    const comboTable = comboTableFor(this.repo, race.date);
 
     const items = this.repo.getEntries(raceKey).map((e): ScoreItem => {
       const odds = e.horseNumber !== null ? oddsMap.get(e.horseNumber) : undefined;
@@ -774,6 +822,27 @@ export class ScoreService {
         };
       }
 
+      // 16. 組み合わせ（前走の着順・昇級・長い休み明け・距離延長の逃げ馬など、ほかの項目で説明しきれない傾向）
+      let pattern: ScoreComponent;
+      // 成績ページが未取得の馬は、前走の有無が分からないので中立（初出走と取り違えないため）
+      const crawled = !!e.netkeibaHorseId && (runs.length > 0 || this.repo.hasHorseRuns(e.netkeibaHorseId) || this.repo.getHorseFetchedAt(e.netkeibaHorseId) !== null);
+      if (!crawled) {
+        pattern = NEUTRAL('馬の成績が未取得（中立50点）');
+      } else {
+        const cells: ComboCells = comboCellsOf({
+          date: race.date,
+          distance: race.distance,
+          raceName: race.name ?? '',
+          grade: race.grade ?? null,
+          sex: e.sex ?? null,
+          age: e.age ?? null,
+          prev: last
+            ? { date: last.date, raceName: last.raceName, distance: last.distance, finish: last.finishPosition, style: last.runningStyle }
+            : null,
+        });
+        pattern = comboScoreOf(cells, comboTable);
+      }
+
       const pedRow = e.netkeibaHorseId ? this.repo.getPedigree(e.netkeibaHorseId) : null;
       // 状況別の適性（血統の推定は今回と同じ芝ダの産駒成績から）
       const pedLookup =
@@ -819,7 +888,7 @@ export class ScoreService {
             })()
           : null,
         aptitudeMatrix,
-        components: { recent, aptitude, jockey, matchup, history, state, closing, margin, speed, frame, change, layoff, position, jockeyPos, trend },
+        components: { recent, aptitude, jockey, matchup, history, state, closing, margin, speed, frame, change, layoff, position, jockeyPos, trend, pattern },
       };
     });
 

@@ -3,7 +3,7 @@
  */
 import type { AptitudeMatrixView, PredictionMark } from '../types/keiba';
 
-export type ComponentKey = 'recent' | 'aptitude' | 'jockey' | 'matchup' | 'history' | 'state' | 'closing' | 'margin' | 'speed' | 'frame' | 'change' | 'layoff' | 'position' | 'jockeyPos' | 'trend';
+export type ComponentKey = 'recent' | 'aptitude' | 'jockey' | 'matchup' | 'history' | 'state' | 'closing' | 'margin' | 'speed' | 'frame' | 'change' | 'layoff' | 'position' | 'jockeyPos' | 'trend' | 'pattern';
 
 export const COMPONENT_LABELS: Record<ComponentKey, string> = {
   recent: '近走',
@@ -21,11 +21,12 @@ export const COMPONENT_LABELS: Record<ComponentKey, string> = {
   position: '位置どり',
   jockeyPos: '騎手の位置どり',
   trend: '馬場傾向',
+  pattern: '組み合わせ',
 };
 
-export const COMPONENT_KEYS: ComponentKey[] = ['recent', 'aptitude', 'jockey', 'matchup', 'history', 'state', 'closing', 'margin', 'speed', 'frame', 'change', 'layoff', 'position', 'jockeyPos', 'trend'];
+export const COMPONENT_KEYS: ComponentKey[] = ['recent', 'aptitude', 'jockey', 'matchup', 'history', 'state', 'closing', 'margin', 'speed', 'frame', 'change', 'layoff', 'position', 'jockeyPos', 'trend', 'pattern'];
 /** データ不足の判定に数えない項目（あとから追加し、データがそろうまで時間がかかる項目。既存の判定を変えないため） */
-const NOT_COUNTED_FOR_SHORTAGE: ComponentKey[] = ['closing', 'margin', 'speed', 'frame', 'change', 'layoff', 'position', 'jockeyPos', 'trend'];
+const NOT_COUNTED_FOR_SHORTAGE: ComponentKey[] = ['closing', 'margin', 'speed', 'frame', 'change', 'layoff', 'position', 'jockeyPos', 'trend', 'pattern'];
 
 export interface ScoreComponent {
   score: number;
@@ -313,6 +314,17 @@ export const COMPONENT_DESCRIPTIONS: Record<ComponentKey, ComponentDescription> 
       '直近2週の結果が8レース未満なら中立の50点',
       '答え合わせの画面では、開催日ごとの当日の馬場傾向も確認できます',
       '初期配分は0%（過去レースの検証と毎週の自動見直しで効果を確かめます）',
+    ],
+  },
+  pattern: {
+    summary: '組み合わせ補正。ほかの項目の合計点では説明しきれない傾向（前走の着順・昇級・長い休み明け・距離延長の逃げ馬など）を、過去の予想の結果から学んで補います。',
+    source: '結果がそろった予想の記録（そのレースの月より前の分だけ）と、各馬の前走（レース日より前の走だけ）',
+    lines: [
+      '区分：前走（1着で昇級／1着／2〜3着／4〜5着／6〜9着／10着以下／初出走の未勝利戦／初出走）、間隔（半年以上／牝3〜4歳の10週〜半年）、前走で逃げた馬の距離延長',
+      '区分ごとに「実際の3着内率 − ほかの項目の合計点の順位から期待される3着内率」を計算。区分どうしの重なりは差し引き、件数の少ない区分は0に寄せる',
+      '点数：50点 ＋ 当てはまる区分の差の合計 × 2（10ポイント低いと −20点）。当てはまる区分が無ければ50点',
+      '記録が足りない月（5,000頭未満）は中立の50点',
+      '初期配分は13%（ほかの項目を同じ比のまま縮めて空ける）。2026-11-15、確認用3,609レースで上位5頭に3着内 +0.78pt・186勝103敗',
     ],
   },
 };

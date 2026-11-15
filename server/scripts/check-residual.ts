@@ -21,7 +21,9 @@ import { openDatabase } from '../db/index';
 import { RaceRepository } from '../db/repository';
 import { buildSamples } from '../services/weight-tuner';
 import { activeWeights, normalizeGrade } from '../services/score-service';
-import { COMPONENT_KEYS } from '../../src/utils/dataScore';
+import { COMPONENT_KEYS as ALL_KEYS } from '../../src/utils/dataScore';
+// 「組み合わせ」の項目は、調べる対象そのものなので合計点から除く
+const COMPONENT_KEYS = ALL_KEYS.filter((k) => k !== 'pattern');
 import { classOf, intervalBand } from './check-combos';
 
 const HOLDOUT_SHARE = 0.3;
