@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { History, Loader2, AlertCircle } from 'lucide-react';
 import type { TrackCondition } from '../types/keiba';
 
@@ -105,6 +105,22 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({ raceKey, condition }
     if (!res.ok) throw new Error(data.error || '分析に失敗しました');
     setAnalysis(data.analysis);
   };
+
+  // 保存済みのデータがあれば、開いた時点で分析を表示する（重賞は夜間処理で自動取得される）
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/history/analysis/${raceKey}?condition=all&raceCondition=${encodeURIComponent(condition)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (alive && data?.analysis && (data.analysis.byCondition?.[0]?.races ?? 0) > 0) setAnalysis(data.analysis);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // レースを開いたときに1回だけ読む（馬場を変えたときは「今回」の表示だけが変わる）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raceKey]);
 
   const handleAnalyze = async (cond: DetailCondition = detail) => {
     setBusy('analyze');

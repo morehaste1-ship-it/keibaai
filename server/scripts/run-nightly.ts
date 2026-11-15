@@ -8,6 +8,7 @@
  * - その日に開催があれば、その日の出馬表を全レース取り込み直す（枠順・騎手・馬IDが確定した最新の出馬表にするため）
  * - 翌日に開催があれば、翌日の出馬表・単勝オッズを取り込む（金曜は週末分をまとめて取り込むため不要）
  * - 金曜（木曜の深夜）だけ、最初に週末の出馬表・単勝オッズを取得する（旧・木曜21時バッチ）
+ * - 7日先までの重賞（G1・G2・G3）の過去10年の同一レースを取得する（足りない年だけ）
  * - そのあと、出走馬の過去走 → 血統 → 騎手成績（出走予定の騎手、続いて取得途中の騎手）の順に取得
  * - 最後に、翌日の全レースの単勝オッズ（発売前は予想オッズ）を取り直し、既定の配分で「前日予想」（eve）を記録する。
  *   終了時刻を過ぎていても行う（取得はレース数ページのみ）
@@ -30,6 +31,7 @@ import { ReviewService } from '../services/review-service';
 import { backupDatabase, uploadOffsite } from '../services/db-backup';
 import { runPastStage } from './past-stage';
 import { logWeightReview } from './tune-stage';
+import { runHistoryStage } from './history-stage';
 import { DEFAULT_DB_PATH } from '../db/index';
 import { DEFAULT_BACKUP_DIR } from '../services/db-backup';
 import { dbShrinkProblem, diskShortage, pruneCache } from '../services/maintenance';
@@ -165,6 +167,13 @@ async function main(): Promise<void> {
       const status = await batch.prepareWeekendRaces();
       console.log(`[Batch] result: total=${status.totalRaces} success=${status.successCount} failure=${status.failureCount}`);
       for (const d of status.details) if (d.status !== 'success') console.log(`[Batch] NG ${d.raceId}: ${d.message}`);
+    }
+
+    // 重賞（G1・G2・G3）の過去10年の同一レース（7日先まで。足りない年だけ取る）
+    try {
+      await runHistoryStage(repo, deadline);
+    } catch (err: any) {
+      console.log(`[History] 過去10年の取得を中断しました（${err?.message ?? err}）`);
     }
 
     const dbFetcher = createDbFetcher(repo);

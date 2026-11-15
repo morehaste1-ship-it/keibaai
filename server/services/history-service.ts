@@ -41,7 +41,7 @@ const SEARCH_RANGE_DAYS = 15;
 /** 土日の開催一覧が空だったとき、もう一度読むまでの待ち時間（netkeiba が一時的に空を返すことがあるため） */
 const EMPTY_RETRY_WAIT_MS = 5000;
 /** 開催一覧が空で返り続けたことを表す印（この年以降の取得を止める） */
-const LIST_UNAVAILABLE = '開催一覧が取得できません';
+export const LIST_UNAVAILABLE = '開催一覧が取得できません';
 
 /**
  * その年に探す日の一覧（近い順）。

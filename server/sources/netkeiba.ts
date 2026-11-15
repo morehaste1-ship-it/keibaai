@@ -414,7 +414,10 @@ export class NetkeibaSource implements RaceDataSource {
     const distance = parseInt(courseMatch[2], 10);
 
     // 馬場状態（良・稍重・重・不良）。ページでは「稍」「不」と省略されることがある。表記が見つからない場合は null
-    const condMatch = html.match(/馬場[：:]\s*(良|稍重|稍|重|不良|不)/);
+    // 現在の結果ページは「馬場:」の見出しがなく、RaceData01 内の <span class="Item03"> 良</span> の形で載る
+    const condMatch =
+      html.match(/馬場[：:]\s*(良|稍重|稍|重|不良|不)/) ||
+      html.match(/<div class="RaceData01">[\s\S]*?<span class="Item03">\s*(良|稍重|稍|重|不良|不)\s*<\/span>/);
     const trackCondition = normalizeCondition(condMatch?.[1] ?? null);
 
     // 結果テーブル（着順・馬名などの見出しを含む table）を探す
