@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Ticket as TicketIcon, Copy, Check } from 'lucide-react';
 import { buildPlans, type RealDataView } from '../utils/trifecta';
+import { BET_MENU, menuTickets, type MenuBet } from '../utils/bets';
 
 const KIND_STYLE: Record<string, string> = {
   本命: 'border-red-500/50 text-red-300',
@@ -131,6 +132,76 @@ export const RealTicketsView: React.FC<{ data: RealDataView | null }> = ({ data 
         <p className="text-[10px] text-slate-500">
           1点あたりの金額は、予算を点数で割って100円単位で切り捨てた額です。複数の予想で同じ組み合わせが重なる場合は1点として数えます。オッズ（3連単の配当）は取得していないため、配当に応じた傾斜配分は行っていません。
         </p>
+      </div>
+
+      <MenuBetsView data={data} name={name} />
+    </div>
+  );
+};
+
+/** 選べる買い方（3連複・3連単ボックス）。過去の記録での的中率・回収率を添えて並べる */
+const MenuBetsView: React.FC<{ data: RealDataView; name: (n: number) => string }> = ({ data, name }) => {
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const rows = BET_MENU.map((b) => ({ b, tickets: menuTickets(b.id, data.ranked) }));
+  const fmt = (b: MenuBet, t: number[]) => t.join(b.ordered ? '→' : '-');
+  const copy = async (b: MenuBet, tickets: number[][]) => {
+    try {
+      await navigator.clipboard.writeText(`${b.group}\n${tickets.map((t) => fmt(b, t)).join('\n')}`);
+      setCopiedId(b.id);
+      setTimeout(() => setCopiedId(null), 1500);
+    } catch {
+      setCopiedId(null);
+    }
+  };
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 className="text-base font-black text-white flex items-center gap-2">
+        <TicketIcon className="w-4 h-4 text-violet-400" />
+        そのほかの買い方（3連複・3連単ボックス）
+      </h3>
+      <p className="text-[11px] text-slate-400">
+        目的に合わせて選べるように並べています。的中率・回収率は過去の記録（2025-10-25以降の3,682レース）で100円ずつ買った場合の成績です。答え合わせの「券種」の表でも、同じ買い方の成績を確認できます。
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {rows.map(({ b, tickets }) => (
+          <div key={b.id} className={`rounded-xl border border-slate-700 p-3 text-[11px] ${tickets ? '' : 'opacity-60'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-black text-white">
+                {b.label}
+                <span className="ml-2 text-[11px] font-normal text-slate-400">{tickets ? `${tickets.length}点` : '作成できず'}</span>
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full border border-violet-500/40 text-violet-300">{b.purpose}</span>
+            </div>
+            <p className="mt-1 text-slate-300">{b.rule}</p>
+            <p className="mt-1 text-slate-400">
+              過去の成績：的中率 {b.ref.hit}%・回収率 {b.ref.recovery}%
+            </p>
+            {tickets ? (
+              <>
+                <div className="mt-2 flex flex-wrap gap-1 text-slate-300">
+                  {tickets.map((t) => (
+                    <span
+                      key={t.join('-')}
+                      className="bg-slate-950/60 border border-slate-800 rounded px-1.5 py-0.5"
+                      title={t.map(name).join(b.ordered ? ' → ' : '・')}
+                    >
+                      {fmt(b, t)}
+                    </span>
+                  ))}
+                </div>
+                <button
+                  onClick={() => copy(b, tickets)}
+                  className="mt-2 flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-slate-800"
+                >
+                  {copiedId === b.id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  {copiedId === b.id ? 'コピーしました' : '買い目をコピー'}
+                </button>
+              </>
+            ) : (
+              <p className="mt-1 text-slate-400">必要な印・頭数がそろいません</p>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

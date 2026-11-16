@@ -13,6 +13,7 @@ import type { NetkeibaSource } from '../sources/netkeiba';
 import { DEFAULT_HORSE_K, DEFAULT_JOCKEY_K, DEFAULT_WEIGHTS, MAX_HORSE_K, MAX_JOCKEY_K, activeWeights, type ScoreService } from './score-service';
 import { COMPONENT_KEYS, normalizeTo100, rankAndMark, type ShortageMode, type Weights } from '../../src/utils/dataScore';
 import { buildPlans, forecastPace } from '../../src/utils/trifecta';
+import { BET_MENU, menuTickets, type MenuBet } from '../../src/utils/bets';
 import { COMPONENT_LABELS } from '../../src/utils/dataScore';
 
 export type RecordSource = PredictionRecord['source'];
@@ -349,13 +350,15 @@ export interface Summary {
 }
 
 /** 券種と、印からの買い方（各100円） */
-export const BET_RULES: { type: string; label: string; ordered: boolean; rule: string }[] = [
+export const BET_RULES: { type: string; label: string; ordered: boolean; rule: string; payout?: string }[] = [
   { type: 'tansho', label: '単勝', ordered: true, rule: '◎' },
   { type: 'fukusho', label: '複勝', ordered: true, rule: '◎' },
   { type: 'wide', label: 'ワイド', ordered: false, rule: '◎-◯、◎-▲' },
   { type: 'umaren', label: '馬連', ordered: false, rule: '◎から◯▲△△へ流し' },
   { type: 'umatan', label: '馬単', ordered: true, rule: '◎1着固定で◯▲△△へ' },
   { type: 'sanrenpuku', label: '3連複', ordered: false, rule: '◎軸・2頭目◯▲・3頭目◯▲△△' },
+  // 2026-11-16 追加：選べる買い方（src/utils/bets.ts の BET_MENU）。payout = 払戻の券種
+  ...BET_MENU.filter((b) => b.id !== 'sanrenpuku').map((b) => ({ type: b.id, label: b.label, ordered: b.ordered, rule: b.rule, payout: b.payoutType })),
 ];
 
 /** 印から券種ごとの買い目を作る。必要な印がそろわなければ null */
@@ -391,6 +394,8 @@ export function betTickets(marks: PredictionRecord['marks'], type: string): numb
       return out;
     }
     default:
+      // 選べる買い方（3連複の1頭軸・ボックス、3連単ボックス）は、データ予想の順位から作る
+      if (BET_MENU.some((b) => b.id === type)) return menuTickets(type as MenuBet['id'], marks);
       return null;
   }
 }
@@ -448,7 +453,8 @@ export function evaluate(rec: PredictionRecord, outcome: RaceOutcome | null, rac
     ? BET_RULES.map((rule) => {
         const tickets = betTickets(rec.marks, rule.type);
         if (!tickets) return { type: rule.type, label: rule.label, available: false, ticketCount: 0, cost: 0, hit: false, payout: 0, refund: 0 };
-        const wins = outcome.payouts?.[rule.type] ?? [];
+        const payoutKey = rule.payout ?? rule.type;
+        const wins = outcome.payouts?.[payoutKey] ?? (payoutKey === 'sanrentan' ? outcome.trifecta : []);
         const key = (c: number[]) => (rule.ordered ? c : [...c].sort((x, y) => x - y)).join('-');
         let payout = 0;
         let refund = 0;

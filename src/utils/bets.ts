@@ -98,3 +98,56 @@ export function planTrio(
   const box = n.slice(0, rule.boxSize);
   return { ...s, axis: [], partners: box, tickets: trioBox(box) };
 }
+
+/**
+ * 選べる買い方（画面の買い目タブ・答え合わせで共通）。
+ * 自動で切り替えるのはやめ（2026-11-16 の検証で、合計点の差で切り替えても確認用で回収率が下がった）、目的に合わせて選べるように並べる。
+ * ref = 過去の記録での成績（npm run check-bets の確認用：2025-10-25 以降の3,682レース）
+ */
+export interface MenuBet {
+  /** 答え合わせの券種キー（sanrenpuku は以前からある「今の3連複」） */
+  id: 'sanrenpuku' | 'sanrenpuku_axis1' | 'sanrenpuku_box5' | 'sanrentan_box4' | 'sanrentan_box5';
+  group: '3連複' | '3連単';
+  label: string;
+  rule: string;
+  purpose: string;
+  /** 払戻の券種 */
+  payoutType: 'sanrenpuku' | 'sanrentan';
+  ordered: boolean;
+  ref: { hit: number; recovery: number };
+}
+
+export const BET_MENU: MenuBet[] = [
+  { id: 'sanrenpuku', group: '3連複', label: '3連複 ◎軸', rule: '◎軸・2頭目◯▲・3頭目◯▲△△（5点）', purpose: '回収率重視', payoutType: 'sanrenpuku', ordered: false, ref: { hit: 21.2, recovery: 72.9 } },
+  { id: 'sanrenpuku_axis1', group: '3連複', label: '3連複 1頭軸流し', rule: 'データ1位を軸に2〜6位へ流し（10点）', purpose: '的中率重視', payoutType: 'sanrenpuku', ordered: false, ref: { hit: 29.6, recovery: 67.5 } },
+  { id: 'sanrenpuku_box5', group: '3連複', label: '3連複 5頭ボックス', rule: 'データ1〜5位のボックス（10点）', purpose: '軸を決めにくいとき', payoutType: 'sanrenpuku', ordered: false, ref: { hit: 28.8, recovery: 69.6 } },
+  { id: 'sanrentan_box4', group: '3連単', label: '3連単 4頭ボックス', rule: 'データ1〜4位のボックス（24点）', purpose: '着順を問わず高配当', payoutType: 'sanrentan', ordered: true, ref: { hit: 17.0, recovery: 63.2 } },
+  { id: 'sanrentan_box5', group: '3連単', label: '3連単 5頭ボックス', rule: 'データ1〜5位のボックス（60点）', purpose: '的中率重視（点数が多い）', payoutType: 'sanrentan', ordered: true, ref: { hit: 28.8, recovery: 64.5 } },
+];
+
+/** 買い方の買い目。horses は印と順位（取消・除外の馬を含んでよい）。必要な馬がそろわなければ null */
+export function menuTickets(id: MenuBet['id'], horses: { horseNumber: number | null; mark: string; rank: number }[]): number[][] | null {
+  const valid = horses.filter((h): h is { horseNumber: number; mark: string; rank: number } => h.horseNumber !== null);
+  const byRank = [...valid].sort((a, b) => a.rank - b.rank).map((h) => h.horseNumber);
+  const of = (m: string) => valid.filter((h) => h.mark === m).map((h) => h.horseNumber);
+  switch (id) {
+    case 'sanrenpuku': {
+      const [hon] = of('◎');
+      const [tai] = of('◯');
+      const [tan] = of('▲');
+      const ren = of('△');
+      if (hon === undefined || tai === undefined || tan === undefined || ren.length < 2) return null;
+      const out: Trio[] = [];
+      for (const b of [tai, tan]) for (const c of [tai, tan, ...ren]) if (b !== c) out.push(sortTrio(hon, b, c));
+      return uniqTrios(out);
+    }
+    case 'sanrenpuku_axis1':
+      return byRank.length >= 6 ? trioAxis1(byRank[0], byRank.slice(1, 6)) : null;
+    case 'sanrenpuku_box5':
+      return byRank.length >= 5 ? trioBox(byRank.slice(0, 5)) : null;
+    case 'sanrentan_box4':
+      return byRank.length >= 4 ? trifectaBox(byRank.slice(0, 4)) : null;
+    case 'sanrentan_box5':
+      return byRank.length >= 5 ? trifectaBox(byRank.slice(0, 5)) : null;
+  }
+}

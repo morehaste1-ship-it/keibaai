@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ClipboardCheck, RefreshCw, Download, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import { DeviationDetail, DeviationSummaryView, type DeviationData, type DeviationSummaryData } from './DeviationView';
 import { WeightHistoryView } from './WeightHistoryView';
+import { BET_MENU } from '../utils/bets';
 
 interface MarkStat {
   n: number;
@@ -74,6 +75,8 @@ const BETS = [
   { type: 'umaren', label: '馬連', rule: '◎から◯▲△△へ流し（4点）' },
   { type: 'umatan', label: '馬単', rule: '◎1着固定で◯▲△△へ（4点）' },
   { type: 'sanrenpuku', label: '3連複', rule: '◎軸・2頭目◯▲・3頭目◯▲△△（5点）' },
+  // 選べる買い方（src/utils/bets.ts の BET_MENU。買い目タブと同じ）
+  ...BET_MENU.filter((b) => b.id !== 'sanrenpuku').map((b) => ({ type: b.id, label: b.label, rule: b.rule })),
 ];
 
 type Scope = 'graded' | 'all';
