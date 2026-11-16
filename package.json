@@ -22,7 +22,8 @@
     "combos": "tsx server/scripts/check-combos.ts",
     "residual": "tsx server/scripts/check-residual.ts",
     "combo-adjust": "tsx server/scripts/check-combo-adjust.ts",
-    "history-backfill": "tsx server/scripts/run-history-backfill.ts"
+    "history-backfill": "tsx server/scripts/run-history-backfill.ts",
+    "check-bets": "tsx server/scripts/check-bets.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
