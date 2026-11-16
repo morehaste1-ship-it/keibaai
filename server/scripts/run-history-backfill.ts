@@ -14,7 +14,7 @@
  * 止める時刻（ほかの自動取得の5分前。Mac のローカル時間）
  *  毎日 0:55（夜間処理 1:00）・10:35（出馬表 10:40）・12:55（出馬表 13:00）、木曜 14:25・15:55（出馬表 14:30・16:00）
  * アクセス制限の兆候が出たら、翌朝6:00まで止める（data/history-backfill-pause.json）
- * 過去10年を探し終えたレースは data/history-backfill-done.json に記録し、見つからない年を毎回探し直さない
+ * 過去10年を探し終えたレースは data/history-backfill-done-v2.json に記録し、見つからない年を毎回探し直さない
  * 開催一覧が一時的に取れないときは、その回だけ止める（30分後の起動でやり直す）
  */
 import fs from 'node:fs';
@@ -44,7 +44,8 @@ const MIN_WINDOW_MS = 5 * 60 * 1000;
 
 const PAUSE_FILE = path.join(path.dirname(DEFAULT_DB_PATH), 'history-backfill-pause.json');
 /** 過去10年を探し終えたレース（見つからない年があっても、探し直さない。毎回同じ日付を探すのは無駄なため） */
-const DONE_FILE = path.join(path.dirname(DEFAULT_DB_PATH), 'history-backfill-done.json');
+// v2：2026-11-16 に名前の照合（表記ゆれ・冠名・別会場）を直したため、全レースを探し直す（古い v1 のファイルは使わずに残す）
+const DONE_FILE = path.join(path.dirname(DEFAULT_DB_PATH), 'history-backfill-done-v2.json');
 
 function loadDone(): Set<string> {
   try {

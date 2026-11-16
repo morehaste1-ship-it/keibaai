@@ -22,6 +22,28 @@ export function normalizeRaceName(name: string): string {
     .toLowerCase();
 }
 
+/**
+ * 照合用の名前（シリーズの分け方には使わない）。「ステークス」と「S」、「カップ」と「C」の表記ゆれをそろえる
+ * （例: 2025年の結果ページは「京王杯２歳Ｓ」、出馬表は「京王杯２歳ステークス」）
+ */
+export function raceNameMatchKey(name: string): string {
+  return normalizeRaceName(name).replace(/ステークス/g, 's').replace(/カップ/g, 'c');
+}
+
+/**
+ * 同じレースの名前か。表記ゆれをそろえて一致するか、協賛社の名前（冠名）が前に付いただけ
+ * （例: 2019年「東京中日Ｓ杯武蔵野Ｓ」と「武蔵野Ｓ」）なら同じとみなす。短すぎる名前（3文字未満）は完全一致だけ
+ */
+export function sameRaceName(a: string, b: string): boolean {
+  const ka = raceNameMatchKey(a);
+  const kb = raceNameMatchKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  const short = ka.length <= kb.length ? ka : kb;
+  const long = short === ka ? kb : ka;
+  return short.length >= 3 && long.endsWith(short);
+}
+
 /** 同一シリーズを表すキー（競走名・会場・芝ダ・距離） */
 export function seriesKeyOf(raceName: string, venueName: string, surface: string, distance: number): string {
   return `${normalizeRaceName(raceName)}|${venueName}|${surface}|${distance}`;
@@ -247,7 +269,7 @@ export class HistoryService {
           // 開催は分かっているので、開催一覧は探さずに結果ページだけを読み直す（失敗したら通常の探し方に戻る）
           try {
             const page = await this.source.fetchRaceResult({ source: 'netkeiba', id: saved.raceId });
-            if (names.includes(normalizeRaceName(page.raceName)) && page.surface === race.surface && page.distance === race.distance) {
+            if (names.some((n) => sameRaceName(n, page.raceName)) && page.surface === race.surface && page.distance === race.distance) {
               results.push(this.saveYear(year, { raceId: saved.raceId, date: saved.date, trackName: saved.venueName }, page, race, seriesKey));
               continue;
             }
@@ -290,8 +312,9 @@ export class HistoryService {
     const shortNameOf = (text: string) =>
       normalizeRaceName(text.normalize('NFKC').replace(/^\s*\d+R\s*/, '').split(/\s+/)[0] ?? '');
     const likely = (c: CalendarRace) => {
-      const s = shortNameOf(c.raceName);
-      return s.length >= 2 && names.some((n) => n.startsWith(s));
+      // 表記ゆれ（ステークス／S など）をそろえ、冠名が付いた名前（途中に含まれる）も候補にする
+      const s = raceNameMatchKey(shortNameOf(c.raceName));
+      return s.length >= 2 && names.some((n) => raceNameMatchKey(n).startsWith(s) || raceNameMatchKey(n).includes(s) || s.endsWith(raceNameMatchKey(n)));
     };
 
     // 同じ曜日に合わせた日から近い順に、見つかるまで1日ずつ探す
@@ -329,10 +352,12 @@ export class HistoryService {
         ...sameCourse.filter((c) => c.trackName === race.venueName && likely(c)),
         ...sameCourse.filter((c) => c.trackName !== race.venueName && likely(c)),
         ...sameCourse.filter((c) => c.trackName === race.venueName && !likely(c)),
-      ].slice(0, 4);
+        // 別の会場（京都の改修中の阪神開催など）は、一覧の省略名が合わなくても確かめる（結果ページの正式名で照合する）
+        ...sameCourse.filter((c) => c.trackName !== race.venueName && !likely(c)),
+      ].slice(0, 6);
       for (const c of ordered) {
         const p = await this.source.fetchRaceResult({ source: 'netkeiba', id: c.raceId });
-        if (names.includes(normalizeRaceName(p.raceName))) {
+        if (names.some((n) => sameRaceName(n, p.raceName))) {
           hit = c;
           page = p;
           break;
