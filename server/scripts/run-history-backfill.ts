@@ -1,18 +1,20 @@
 /**
  * 過去の重賞の「過去10年」と、その出走馬の成績を、まとめてさかのぼって取得する（組み合わせ補正のレース専用区分の検証用）
  *
- * 実行: npm run history-backfill              … 次の「ほかの取得の5分前」まで取得する（月〜木だけ）
+ * 実行: npm run history-backfill              … 次の「ほかの取得の5分前」まで取得する（毎日。2026-11-18 に月〜木から変更）
  *       npm run history-backfill -- --status   … 進み具合を表示するだけ（取得しない）
- *       npm run history-backfill -- --force    … 金〜日でも実行する（止める時刻は同じ）
- * 自動実行: launchd com.keibaai.backfill（30分ごとに起動を試みる。ほかの取得の実行中・金〜日は何もしない）
+ *       npm run history-backfill -- --force    … 以前の曜日の制限を外すためのもの（今は毎日動くので同じ動き）
+ * 自動実行: launchd com.keibaai.backfill（30分ごとに起動を試みる。ほかの取得の実行中は何もしない）
  *
  * 対象: 予想の記録と結果がそろった過去の重賞（G1・G2・G3）。新しいレースから順に
  *  （配分の見直しの確認用は新しい3割のレースなので、そこから埋める）
  * 1レースごとに
  *  ① 過去10年の同一レースの結果（取得済みの年は飛ばす。馬IDが無い年は結果ページだけ読み直す）
  *  ② その過去10年に出た馬の成績ページ（一度取った馬は取り直さない）
- * 止める時刻（ほかの自動取得の5分前。Mac のローカル時間）
- *  毎日 0:55（夜間処理 1:00）・10:35（出馬表 10:40）・12:55（出馬表 13:00）、木曜 14:25・15:55（出馬表 14:30・16:00）
+ * 止める時刻（ほかの自動取得の5分前。Mac のローカル時間）と、そのあと始めない時間
+ *  毎日 0:55（夜間処理 1:00）・10:35（出馬表 10:40）・12:55（出馬表 13:00）… 止めてから10分は始めない（実行中は印で分かる）
+ *  毎日 9:25（朝のオッズ 9:30）・11:55（昼のオッズ 12:00）… オッズの取得は印を取らないので、止めてから30分は始めない
+ *  木曜 14:25・15:55（出馬表 14:30・16:00）・20:55（週末の準備 batch 21:00）… 止めてから10分は始めない
  * アクセス制限の兆候が出たら、翌朝6:00まで止める（data/history-backfill-pause.json）
  * 過去10年を探し終えたレースは data/history-backfill-done-v2.json に記録し、見つからない年を毎回探し直さない
  * 開催一覧が一時的に取れないときは、そのレースを飛ばして次へ。3レース続いたら、その回は止める（30分後の起動でやり直す）
@@ -29,16 +31,19 @@ import { NetkeibaSource } from '../sources/netkeiba';
 import { JraCalendar } from '../sources/jra-calendar';
 import { createDbFetcher } from './jockey-stage';
 
-/** 止める時刻（時・分）。weekday を付けたものはその曜日だけ（0=日〜6=土） */
-const STOP_TIMES: { h: number; m: number; weekday?: number }[] = [
+/** 止める時刻（時・分）。weekday を付けたものはその曜日だけ（0=日〜6=土）。blockMin = 止めてから何分は始めないか（既定10分） */
+const STOP_TIMES: { h: number; m: number; weekday?: number; blockMin?: number }[] = [
   { h: 0, m: 55 },
+  { h: 9, m: 25, blockMin: 30 },
   { h: 10, m: 35 },
+  { h: 11, m: 55, blockMin: 30 },
   { h: 12, m: 55 },
   { h: 14, m: 25, weekday: 4 },
   { h: 15, m: 55, weekday: 4 },
+  { h: 20, m: 55, weekday: 4 },
 ];
-/** 実行する曜日（月〜木） */
-const RUN_WEEKDAYS = new Set([1, 2, 3, 4]);
+/** 実行する曜日（毎日。ほかの自動取得と重なる時間は STOP_TIMES で避ける） */
+const RUN_WEEKDAYS = new Set([0, 1, 2, 3, 4, 5, 6]);
 /** 残り時間がこれ未満なら始めない */
 const MIN_WINDOW_MS = 5 * 60 * 1000;
 
@@ -63,7 +68,7 @@ function saveDone(done: Set<string>): void {
 }
 
 /**
- * 今、始めてはいけない時間帯か：止める時刻から10分間（ほかの取得の開始5分前〜開始5分後）。
+ * 今、始めてはいけない時間帯か：止める時刻から blockMin 分間（既定10分＝ほかの取得の開始5分前〜開始5分後）。
  * ほかの取得が始まる直前・直後に印を取ってしまい、ほかの取得を飛ばさせないため
  */
 export function inBlockedWindow(now: Date): boolean {
@@ -74,7 +79,7 @@ export function inBlockedWindow(now: Date): boolean {
       d.setHours(t.h, t.m, 0, 0);
       if (t.weekday !== undefined && d.getDay() !== t.weekday) continue;
       const diff = now.getTime() - d.getTime();
-      if (diff >= 0 && diff < 10 * 60 * 1000) return true;
+      if (diff >= 0 && diff < (t.blockMin ?? 10) * 60 * 1000) return true;
     }
   }
   return false;
@@ -256,7 +261,7 @@ async function main(): Promise<void> {
   }
   const now = new Date();
   if (!args.includes('--force') && !RUN_WEEKDAYS.has(now.getDay())) {
-    console.log('[Backfill] 月〜木だけ実行します（今日は対象外）');
+    console.log('[Backfill] 今日は実行しない曜日です');
     return;
   }
   const p = pausedUntil();
