@@ -15,7 +15,7 @@
  *  毎日 0:55（夜間処理 1:00）・10:35（出馬表 10:40）・12:55（出馬表 13:00）、木曜 14:25・15:55（出馬表 14:30・16:00）
  * アクセス制限の兆候が出たら、翌朝6:00まで止める（data/history-backfill-pause.json）
  * 過去10年を探し終えたレースは data/history-backfill-done-v2.json に記録し、見つからない年を毎回探し直さない
- * 開催一覧が一時的に取れないときは、その回だけ止める（30分後の起動でやり直す）
+ * 開催一覧が一時的に取れないときは、そのレースを飛ばして次へ。3レース続いたら、その回は止める（30分後の起動でやり直す）
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -175,6 +175,8 @@ async function run(repo: RaceRepository, db: ReturnType<typeof openDatabase>, de
   const history = new HistoryService(new JraCalendar(), source, repo);
   const searched = loadDone();
   let done = 0;
+  // 「開催一覧が取得できない」が続いた回数（3レース続いたら本当の不調とみなして止める。1レースだけなら飛ばして次へ）
+  let unavailableStreak = 0;
   for (const r of races) {
     if (Date.now() >= deadline) {
       console.log('[Backfill] 終了時刻になったため、続きは次回に回します');
@@ -197,9 +199,15 @@ async function run(repo: RaceRepository, db: ReturnType<typeof openDatabase>, de
           return;
         }
         if (res.years.some((y) => y.status === 'error' && y.message.startsWith(LIST_UNAVAILABLE))) {
-          console.log('[Backfill] 開催一覧が取得できないため（netkeiba の一時的な不調の可能性）、今回はここで止めます');
-          return;
+          unavailableStreak++;
+          if (unavailableStreak >= 3) {
+            console.log('[Backfill] 開催一覧が3レース続けて取得できないため（netkeiba の一時的な不調の可能性）、今回はここで止めます');
+            return;
+          }
+          console.log('[Backfill] 開催一覧が取得できない年があったため、このレースは次回に回して次へ進みます');
+          continue;
         }
+        unavailableStreak = 0;
         // エラーの年が無ければ探し終えたとして記録する（見つからない年は探し直さない）
         if (!res.years.some((y) => y.status === 'error')) {
           searched.add(r.raceKey);

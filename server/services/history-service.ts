@@ -60,6 +60,8 @@ function formatYmd(d: Date): string {
 export const TRACK_CONDITIONS = ['良', '稍重', '重', '不良'] as const;
 /** 何日先まで探すか（同じ曜日に合わせた日からの前後の日数） */
 const SEARCH_RANGE_DAYS = 15;
+/** 同じ月日の前後何日を、平日も探すか */
+const SAME_DATE_RANGE_DAYS = 3;
 /** 土日の開催一覧が空だったとき、もう一度読むまでの待ち時間（netkeiba が一時的に空を返すことがあるため） */
 const EMPTY_RETRY_WAIT_MS = 5000;
 /** 開催一覧が空で返り続けたことを表す印（この年以降の取得を止める） */
@@ -82,6 +84,14 @@ export function searchDatesFor(year: number, base: Date): Date[] {
     const d = new Date(aligned);
     d.setDate(d.getDate() + off);
     if ([0, 1, 6].includes(d.getDay())) out.push({ d, dist: Math.abs(off) });
+  }
+  // 日付が固定のレース（中山金杯・京都金杯は1月4日・5日。平日のこともある）のため、同じ月日の前後3日は平日も探す
+  const dayMs = 86400000;
+  for (let off = -SAME_DATE_RANGE_DAYS; off <= SAME_DATE_RANGE_DAYS; off++) {
+    const d = new Date(center);
+    d.setDate(d.getDate() + off);
+    if ([0, 1, 6].includes(d.getDay())) continue; // 土日月は上で入れた
+    out.push({ d, dist: Math.abs(Math.round((d.getTime() - aligned.getTime()) / dayMs)) });
   }
   return out.sort((a, b) => a.dist - b.dist || a.d.getTime() - b.d.getTime()).map((x) => x.d);
 }
@@ -328,7 +338,9 @@ export class HistoryService {
       checkedDays.push(formatYmd(d).slice(5));
       let dayRaces = await this.calendar.fetchRacesOnDate(d);
       const weekend = d.getDay() === 0 || d.getDay() === 6;
-      if (weekend) {
+      // 年末年始（12/29〜1/3）は土日でも開催が無いのがふつうなので、「一覧が取れない」の判定に数えない
+      const newYearOff = (d.getMonth() === 11 && d.getDate() >= 29) || (d.getMonth() === 0 && d.getDate() <= 3);
+      if (weekend && !newYearOff) {
         weekendDays++;
         // 土日なのに空なら、一時的な空の応答の可能性があるため少し待って読み直す
         if (dayRaces.length === 0) {
