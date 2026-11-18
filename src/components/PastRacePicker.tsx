@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { History, Undo2 } from 'lucide-react';
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
@@ -23,10 +23,27 @@ interface Props {
   onBack: () => void;
 }
 
-/** 「過去のレース」：データがある過去の開催日をプルダウンで選ぶ（日付の一覧は初めて開いたときに読む） */
+type DateRow = { date: string; races: number };
+/** 前回読んだ開催日の一覧の保存先（この端末だけ。次に開いたときにすぐ出すため） */
+const DATES_CACHE_KEY = 'keibaai.ui.pastDates';
+
+function loadCachedDates(): DateRow[] | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(DATES_CACHE_KEY) ?? 'null');
+    return Array.isArray(v) ? (v as DateRow[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 「過去のレース」：データがある過去の開催日をプルダウンで選ぶ。
+ * 日付の一覧は画面を開いた時点で読み込んでおく（以前は「過去のレース」を押してから読んでいたため、一覧が出るまで待たされた）。
+ * 前回の一覧をこの端末に覚えておき、読み込みが終わるまではそれを出す
+ */
 export const PastRacePicker: React.FC<Props> = ({ pastDate, onPick, onBack }) => {
   const [open, setOpen] = useState(false);
-  const [dates, setDates] = useState<{ date: string; races: number }[] | null>(null);
+  const [dates, setDates] = useState<DateRow[] | null>(() => loadCachedDates());
   const [error, setError] = useState('');
 
   const load = () => {
@@ -36,14 +53,21 @@ export const PastRacePicker: React.FC<Props> = ({ pastDate, onPick, onBack }) =>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '過去の開催日の読み込みに失敗しました');
         setDates(data.dates);
+        try {
+          localStorage.setItem(DATES_CACHE_KEY, JSON.stringify(data.dates));
+        } catch {
+          // 保存できなくても表示には影響させない
+        }
       })
       .catch((e) => setError(e.message));
   };
 
-  const toggle = () => {
-    if (!open && dates === null) load();
-    setOpen(!open);
-  };
+  // 画面を開いた時点で読み込む
+  useEffect(() => {
+    load();
+  }, []);
+
+  const toggle = () => setOpen(!open);
 
   const showSelect = open || pastDate !== null;
 
@@ -77,7 +101,6 @@ export const PastRacePicker: React.FC<Props> = ({ pastDate, onPick, onBack }) =>
         <select
           aria-label="過去の開催日"
           value={pastDate ?? ''}
-          onFocus={() => dates === null && load()}
           onChange={(e) => e.target.value && onPick(e.target.value)}
           className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-slate-200"
         >
@@ -87,7 +110,7 @@ export const PastRacePicker: React.FC<Props> = ({ pastDate, onPick, onBack }) =>
               {label(d.date)} {d.races}R
             </option>
           ))}
-          {pastDate && dates !== null && !dates.some((d) => d.date === pastDate) && <option value={pastDate}>{label(pastDate)}</option>}
+          {pastDate && !(dates ?? []).some((d) => d.date === pastDate) && <option value={pastDate}>{label(pastDate)}</option>}
         </select>
       )}
       {error && <span className="text-red-300">{error}</span>}

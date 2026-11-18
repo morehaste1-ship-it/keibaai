@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { openDatabase } from './server/db/index.ts';
+import { ResponseCache } from './server/services/response-cache.ts';
 import { RaceRepository } from './server/db/repository.ts';
 import { NetkeibaSource } from './server/sources/netkeiba.ts';
 import { PoliteFetcher } from './server/sources/fetcher.ts';
@@ -42,6 +43,8 @@ app.use(express.json());
 // Initialize database
 const db = openDatabase();
 const repo = new RaceRepository(db);
+// 答え合わせ・配分の履歴の集計を使い回す（記録・結果・配分が変わったときだけ計算し直す）
+const responseCache = new ResponseCache(db);
 const fetcher = new PoliteFetcher({
   onLog: (entry) => repo.logFetch(entry),
 });
@@ -571,6 +574,7 @@ app.post('/api/review/record/:raceKey', (req, res) => {
     const { settings, error } = validateSettings(req.body?.settings);
     if (!settings) return res.status(400).json({ status: 'error', error });
     const rec = reviewService.record(raceKey, 'manual', settings);
+    responseCache.clear();
     res.json({ status: 'success', recordedAt: rec.recordedAt });
   } catch (error: any) {
     res.status(400).json({ status: 'error', error: error.message || '記録に失敗しました' });
@@ -586,6 +590,7 @@ app.post('/api/review/outcome/:raceKey', async (req, res) => {
     }
     if (!repo.getRace(raceKey)) return res.status(404).json({ status: 'error', error: '対象レースが未登録です' });
     await reviewService.fetchOutcome(raceKey);
+    responseCache.clear();
     res.json({ status: 'success' });
   } catch (error: any) {
     res.status(502).json({ status: 'error', error: error.message || '結果の取得に失敗しました' });
@@ -596,7 +601,7 @@ app.post('/api/review/outcome/:raceKey', async (req, res) => {
 app.get('/api/weights', (req, res) => {
   try {
     // 版ごとの実際の予想の成績（0 = 既定の配分）
-    const live = Object.fromEntries([...liveStatsByVersion(repo)].map(([id, s]) => [id, s]));
+    const live = responseCache.get('weights-live', () => Object.fromEntries([...liveStatsByVersion(repo)].map(([id, s]) => [id, s])));
     res.json({ status: 'success', current: activeWeights(repo), versions: repo.listWeightVersions(), live });
   } catch (error: any) {
     res.status(500).json({ status: 'error', error: error.message || '配分の読み込みに失敗しました' });
@@ -607,6 +612,7 @@ app.get('/api/weights', (req, res) => {
 app.post('/api/weights/revert', (req, res) => {
   try {
     const v = revertWeights(repo);
+    responseCache.clear();
     res.json({ status: 'success', version: v });
   } catch (error: any) {
     res.status(400).json({ status: 'error', error: error.message || '戻せませんでした' });
@@ -617,7 +623,7 @@ app.post('/api/weights/revert', (req, res) => {
 app.get('/api/review', (req, res) => {
   try {
     const scope = req.query.scope === 'all' ? 'all' : 'graded';
-    res.json({ status: 'success', review: reviewService.review(scope) });
+    res.json({ status: 'success', review: responseCache.get(`review-${scope}`, () => reviewService.review(scope)) });
   } catch (error: any) {
     console.error('Error in /api/review:', error);
     res.status(500).json({ status: 'error', error: error.message || 'Review failed' });

@@ -3,6 +3,7 @@ import { ClipboardCheck, RefreshCw, Download, AlertCircle, ChevronDown, ChevronR
 import { DeviationDetail, DeviationSummaryView, type DeviationData, type DeviationSummaryData } from './DeviationView';
 import { WeightHistoryView } from './WeightHistoryView';
 import { BET_MENU } from '../utils/bets';
+import { useNearViewport } from '../utils/useNearViewport';
 
 interface MarkStat {
   n: number;
@@ -116,6 +117,8 @@ export const ReviewPanel: React.FC = () => {
   const [totalRows, setTotalRows] = useState(0);
   const [dayBiases, setDayBiases] = useState<DayBias[]>([]);
   const [showBias, setShowBias] = useState(false);
+  // 答え合わせの集計は重いので、この欄が画面に近づいてから読み込む（TOPページの表示を待たせないため）
+  const [panelRef, near] = useNearViewport<HTMLElement>();
 
   const load = useCallback(() => {
     setError('');
@@ -141,11 +144,12 @@ export const ReviewPanel: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!near) return;
     load();
     const onUpdate = () => load();
     window.addEventListener('keiba-review-updated', onUpdate);
     return () => window.removeEventListener('keiba-review-updated', onUpdate);
-  }, [load]);
+  }, [load, near]);
 
   const fetchOutcome = async (raceKey: string) => {
     setBusy(raceKey);
@@ -257,7 +261,7 @@ export const ReviewPanel: React.FC = () => {
   };
 
   return (
-    <section className="max-w-7xl w-full mx-auto px-4 pt-4">
+    <section ref={panelRef} className="max-w-7xl w-full mx-auto px-4 pt-4">
       <div className="bg-slate-900/60 border border-teal-800/60 rounded-xl p-4 flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-black text-white flex items-center gap-1.5">
@@ -300,7 +304,7 @@ export const ReviewPanel: React.FC = () => {
           {summaryTable('manual')}
           {(summary?.backtest?.races ?? 0) > 0 && summaryTable('backtest')}
         </div>
-        <WeightHistoryView />
+        {near && <WeightHistoryView />}
 
         {(summary?.backtest?.races ?? 0) > 0 && (
           <p className="text-[11px] text-slate-500">
