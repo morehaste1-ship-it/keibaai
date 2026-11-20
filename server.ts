@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { openDatabase } from './server/db/index.ts';
 import { ResponseCache } from './server/services/response-cache.ts';
+import { Win5Service } from './server/services/win5-service.ts';
 import { RaceRepository } from './server/db/repository.ts';
 import { NetkeibaSource } from './server/sources/netkeiba.ts';
 import { PoliteFetcher } from './server/sources/fetcher.ts';
@@ -63,6 +64,7 @@ const scoreService = new ScoreService(repo);
 const pedigreeService = new PedigreeService(new NetkeibaSource(jockeyFetcher), repo);
 // 答え合わせ（結果ページは1レース1ページのため、通常の取得処理を使う）
 const reviewService = new ReviewService(repo, scoreService, source);
+const win5Service = new Win5Service(repo, scoreService);
 
 // Initialize Gemini client if API key is present
 const apiKey = process.env.GEMINI_API_KEY;
@@ -616,6 +618,26 @@ app.post('/api/weights/revert', (req, res) => {
     res.json({ status: 'success', version: v });
   } catch (error: any) {
     res.status(400).json({ status: 'error', error: error.message || '戻せませんでした' });
+  }
+});
+
+// WIN5：対象レースと各馬の1着の確率の目安（query: date=YYYY-MM-DD。省略時は今日以降で一番近い日）
+app.get('/api/win5', (req, res) => {
+  try {
+    const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : undefined;
+    res.json({ status: 'success', plan: win5Service.plan(date), history: win5Service.history() });
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', error: error.message || 'WIN5 の読み込みに失敗しました' });
+  }
+});
+
+// WIN5：対象レースを netkeiba から読み直す
+app.post('/api/win5/refresh', async (req, res) => {
+  try {
+    const ids = await win5Service.refresh(source);
+    res.json({ status: 'success', found: ids.length === 5, plan: win5Service.plan(), history: win5Service.history() });
+  } catch (error: any) {
+    res.status(502).json({ status: 'error', error: error.message || 'WIN5 の対象レースを読めませんでした' });
   }
 });
 

@@ -7,6 +7,7 @@
  *  3連複：今の答え合わせの買い方（◎軸・2頭目◯▲・3頭目◯▲△△）／いつも2頭軸／いつも1頭軸／いつも5頭ボックス
  *          ／レースの形で選ぶ（2強→2頭軸・1強→1頭軸・混戦→ボックス。判定の点差を何通りも試す）／穴あり（◎＋中穴候補の2頭軸）
  *  3連単：4頭ボックス・5頭ボックス・今の「本命」
+ *  馬単：◎1着固定→◯▲△△（4点）・◎◯▲ボックス（6点）・◎◯の裏表（2点）
  * 見るもの：的中率・回収率・1レースの平均点数。日付順で古い7割（学習用）で点差の基準を選び、新しい3割（確認用）で確かめる。
  * 回収率は高配当1回で大きく動くので、確認用で「今の買い方」との回収率の差と、そのずれ（レースを選び直して測ったばらつき比）も出す
  */
@@ -30,6 +31,8 @@ interface RaceRow {
   scratched: Set<number>;
   trio: Map<string, number>;
   tri: Map<string, number>;
+  /** 馬単の払戻（1着-2着） */
+  exacta: Map<string, number>;
   honmei: { first: number; second: number; third: number }[] | null;
 }
 
@@ -50,7 +53,7 @@ function settle(r: RaceRow, tickets: number[][], ordered: boolean): { cost: numb
   let cost = 0;
   let payout = 0;
   let hit = false;
-  const table = ordered ? r.tri : r.trio;
+  const table = t0IsPair(tickets) ? r.exacta : ordered ? r.tri : r.trio;
   for (const t of tickets) {
     if (t.some((n) => r.scratched.has(n))) continue;
     cost += PRICE;
@@ -132,6 +135,27 @@ function diff(a: Result, b: Result): string {
   return `回収率 ${d0 >= 0 ? '+' : ''}${d0.toFixed(1)}pt（ずれ ${sd > 0 ? (d0 / sd).toFixed(2) : '-'}）`;
 }
 
+/** 買い目が2頭（馬単）か */
+const t0IsPair = (tickets: number[][]) => tickets.length > 0 && tickets[0].length === 2;
+
+/** 馬単の買い目（印から） */
+function exactaFromMarks(r: RaceRow, kind: 'flow' | 'box3' | 'pair'): number[][] | null {
+  const of = (m: string) => r.ranked.filter((h) => h.mark === m).map((h) => h.horseNumber);
+  const [hon] = of('◎');
+  const [tai] = of('◯');
+  const [tan] = of('▲');
+  const ren = of('△');
+  if (hon === undefined || tai === undefined) return null;
+  if (kind === 'pair') return [[hon, tai], [tai, hon]];
+  if (tan === undefined) return null;
+  if (kind === 'box3') {
+    const h = [hon, tai, tan];
+    return h.flatMap((a) => h.filter((b) => b !== a).map((b) => [a, b]));
+  }
+  if (ren.length < 2) return null;
+  return [tai, tan, ...ren.slice(0, 2)].map((b) => [hon, b]);
+}
+
 /** 今の答え合わせの3連複（◎軸・2頭目◯▲・3頭目◯▲△△） */
 function currentTrio(r: RaceRow): number[][] | null {
   const of = (m: string) => r.ranked.filter((h) => h.mark === m).map((h) => h.horseNumber);
@@ -194,6 +218,7 @@ function main(): void {
         scratched: new Set(outcome.finishes.filter((f) => isScratched(f.finishText)).map((f) => f.horseNumber)),
         trio: new Map(trioPay.map((p) => [[...p.combo].sort((a, b) => a - b).join('-'), p.payout])),
         tri: new Map(triPay.map((p) => [p.combo.join('-'), p.payout])),
+        exacta: new Map((outcome.payouts?.umatan ?? []).map((p) => [p.combo.join('-'), p.payout])),
         honmei: record.plans.find((p) => p.kind === '本命' && p.available)?.tickets ?? null,
       });
     }
@@ -216,6 +241,10 @@ function main(): void {
       { label: '3連単 4頭ボックス', make: (r) => trifectaBox(n(r).slice(0, 4)), ordered: true },
       { label: '3連単 5頭ボックス', make: (r) => trifectaBox(n(r).slice(0, 5)), ordered: true },
       { label: '3連単 今の「本命」', make: (r) => (r.honmei ? r.honmei.map((t) => [t.first, t.second, t.third]) : null), ordered: true },
+      // 馬単（2026-11-21 追加）。印は今の答え合わせと同じ（◎◯▲△△）
+      { label: '馬単 ◎1着固定→◯▲△△', make: (r) => exactaFromMarks(r, 'flow'), ordered: true },
+      { label: '馬単 ◎◯▲ボックス', make: (r) => exactaFromMarks(r, 'box3'), ordered: true },
+      { label: '馬単 ◎◯の裏表', make: (r) => exactaFromMarks(r, 'pair'), ordered: true },
     ];
     const baseTrain = evaluate(train, currentTrio, false);
     const baseHold = evaluate(hold, currentTrio, false);

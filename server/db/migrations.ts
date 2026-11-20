@@ -440,4 +440,22 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_history_horse ON history_runs(horse_id);
     `,
   },
+  {
+    version: 17,
+    name: 'win5',
+    sql: `
+      -- WIN5 の対象レース（netkeiba の WIN5 ページから。ページの並び順を残す）
+      CREATE TABLE IF NOT EXISTS win5_targets (
+        source_race_id TEXT PRIMARY KEY,           -- netkeiba のレースID（12桁）
+        page_order     INTEGER NOT NULL,           -- WIN5 ページでの並び（1〜5）
+        fetched_at     TEXT NOT NULL
+      );
+      -- WIN5 の予想の記録（答え合わせ用。同じ日は上書き）
+      CREATE TABLE IF NOT EXISTS win5_records (
+        date        TEXT PRIMARY KEY,              -- WIN5 の日（YYYY-MM-DD）
+        recorded_at TEXT NOT NULL,
+        plan_json   TEXT NOT NULL                  -- 各レースの選んだ馬・点数・確率
+      );
+    `,
+  },
 ];

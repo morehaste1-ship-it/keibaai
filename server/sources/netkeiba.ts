@@ -223,6 +223,17 @@ export function normalizeCondition(text: string | null | undefined): string | nu
   return map[text.trim()] ?? text.trim();
 }
 
+/** WIN5 ページのレースID（JRA の10場のみ・重複なし・ページの並び順）。5つそろわなければ空の配列 */
+export function parseWin5RaceIds(html: string): string[] {
+  const ids: string[] = [];
+  for (const m of html.matchAll(/race_id=(\d{12})/g)) {
+    const id = m[1];
+    if (!/^(0[1-9]|10)$/.test(id.substring(4, 6))) continue;
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids.length === 5 ? ids : [];
+}
+
 /** 騎手成績ページの1行（1騎乗分） */
 export interface JockeyPageRow {
   raceId: string;
@@ -514,6 +525,16 @@ export class NetkeibaSource implements RaceDataSource {
       rows,
       pace: (paceMatch?.[1] as 'S' | 'M' | 'H' | undefined) ?? null,
     };
+  }
+
+  /**
+   * WIN5 の対象レース（今週分）のレースIDを、ページの並び順で返す（https://race.netkeiba.com/top/win5.html）。
+   * 発表前などで見つからなければ空の配列
+   */
+  async fetchWin5RaceIds(): Promise<string[]> {
+    const page = await this.fetcher.get('https://race.netkeiba.com/top/win5.html', { noStore: true });
+    if (page.status !== 200) throw new Error(`WIN5 のページが取得できません (HTTP ${page.status})`);
+    return parseWin5RaceIds(page.text);
   }
 
   /**

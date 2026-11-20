@@ -12,6 +12,7 @@ import { JockeyPanel } from './components/JockeyPanel';
 import { MatchupPanel } from './components/MatchupPanel';
 import { DataPredictionPanel } from './components/DataPredictionPanel';
 import { ReviewPanel } from './components/ReviewPanel';
+import { Win5Panel } from './components/Win5Panel';
 import { RealPedigreeView } from './components/RealPedigreeView';
 import { RealUpsetView } from './components/RealUpsetView';
 import { RealPaceView } from './components/RealPaceView';
@@ -309,6 +310,7 @@ export default function App() {
           { id: 'sec-matchup', label: '脚質×騎手の相性', group: 'このレース' },
         ]
       : []),
+    { id: 'sec-win5', label: 'WIN5', group: '全体・管理' },
     { id: 'sec-review', label: '答え合わせ・配分の見直し', group: '全体・管理' },
     { id: 'sec-fetch', label: '出馬表の取得', group: '全体・管理' },
   ];
@@ -451,6 +453,11 @@ export default function App() {
           <div id="sec-matchup">
             {/* 馬の脚質 × 騎手の相性 */}
             {selectedRace && <MatchupPanel key={`m-${selectedRace.id}`} raceKey={selectedRace.id} />}
+          </div>
+
+          <div id="sec-win5">
+            {/* WIN5（対象5レースの買い目と答え合わせ。見るときに読み込む） */}
+            <Win5Panel />
           </div>
 
           <div id="sec-review">

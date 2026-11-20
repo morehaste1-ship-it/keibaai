@@ -19,6 +19,7 @@ import { JraCalendar } from '../sources/jra-calendar';
 import { acquireLock, readLock, releaseLock } from '../services/crawl-lock';
 import { ScoreService } from '../services/score-service';
 import { ReviewService } from '../services/review-service';
+import { Win5Service } from '../services/win5-service';
 import { diskShortage } from '../services/maintenance';
 import { createDbFetcher, runHorseStage } from './jockey-stage';
 
@@ -100,8 +101,26 @@ async function main(): Promise<void> {
     }
     await calendar.close().catch(() => {});
 
+    // WIN5 の対象レース（今週分）を読み直し、5レースとも馬番がそろっていれば買い目を記録する
+    const win5 = new Win5Service(repo, new ScoreService(repo));
+    const recordWin5 = () => {
+      try {
+        const d = win5.record();
+        if (d) console.log(`[Win5] ${d} の WIN5 の予想を記録しました`);
+      } catch (err: any) {
+        console.log(`[Win5] 記録できませんでした（${err?.message ?? err}）`);
+      }
+    };
+    try {
+      const ids = await win5.refresh(source);
+      console.log(ids.length === 5 ? `[Win5] 対象レース ${ids.join('・')}` : '[Win5] 対象レースはまだ発表されていません');
+    } catch (err: any) {
+      console.log(`[Win5] 対象レースを読めませんでした（${err?.message ?? err}）`);
+    }
+
     if (numbered.length === 0) {
       console.log(`[Cards] 新しく馬番が付いたレースはありません${waiting > 0 ? `（馬番の発表待ち ${waiting}レース）` : ''}`);
+      recordWin5();
       return;
     }
 
@@ -137,6 +156,7 @@ async function main(): Promise<void> {
     console.log(
       `[Cards] 前日予想を記録 ${recorded}/${numbered.length}レース（${kindText || '-'}）` + (waiting > 0 ? `／馬番の発表待ち ${waiting}レース` : ''),
     );
+    recordWin5();
   } catch (err: any) {
     console.error('[Cards] fatal:', err?.message ?? err);
     process.exitCode = 1;

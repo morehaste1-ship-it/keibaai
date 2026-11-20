@@ -949,6 +949,43 @@ export class RaceRepository {
     return row?.source_id ?? null;
   }
 
+  // ---- WIN5 ----
+
+  /** WIN5 の対象レースを保存する（同じレースIDは並び順と取得時刻を上書き） */
+  saveWin5Targets(raceIds: string[]): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      `INSERT INTO win5_targets (source_race_id, page_order, fetched_at) VALUES (?, ?, ?)
+       ON CONFLICT(source_race_id) DO UPDATE SET page_order = excluded.page_order, fetched_at = excluded.fetched_at`,
+    );
+    this.db.transaction(() => raceIds.forEach((id, i) => stmt.run(id, i + 1, now)))();
+  }
+
+  listWin5Targets(): { sourceRaceId: string; pageOrder: number; fetchedAt: string }[] {
+    return (this.db.prepare('SELECT * FROM win5_targets ORDER BY fetched_at DESC, page_order').all() as any[]).map((r) => ({
+      sourceRaceId: r.source_race_id,
+      pageOrder: r.page_order,
+      fetchedAt: r.fetched_at,
+    }));
+  }
+
+  saveWin5Record(date: string, plan: unknown): void {
+    this.db
+      .prepare(
+        `INSERT INTO win5_records (date, recorded_at, plan_json) VALUES (?, ?, ?)
+         ON CONFLICT(date) DO UPDATE SET recorded_at = excluded.recorded_at, plan_json = excluded.plan_json`,
+      )
+      .run(date, new Date().toISOString(), JSON.stringify(plan));
+  }
+
+  listWin5Records(): { date: string; recordedAt: string; plan: any }[] {
+    return (this.db.prepare('SELECT * FROM win5_records ORDER BY date DESC').all() as any[]).map((r) => ({
+      date: r.date,
+      recordedAt: r.recorded_at,
+      plan: JSON.parse(r.plan_json),
+    }));
+  }
+
   // ---- 配分の自動見直し ----
 
   /** 採用した配分の履歴（新しい順） */
